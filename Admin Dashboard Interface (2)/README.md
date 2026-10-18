@@ -8,9 +8,9 @@ style (plain HTML/CSS/JS, no build step). Drop-in sibling of the POS and Kitchen
 - **Dashboard** — sales analytics line chart, top items bar chart, today's operations metrics, weather widget, and a bottom-center Royal Insights capsule with an expanding analytics chat
 - **Transactions** — searchable/filterable table with expandable order details, discount &amp; void reasons
 - **Menu Management** — category-filtered grid with add / edit / delete / toggle-availability
-- **Reports** — basic sales, product performance table, sales by hour + weekly line chart, insights
+- **Reports** — sales summary, product performance, payment methods, hourly trend, and CSV/JSON/print-to-PDF exports
 - **Users** — user list with role pills, add / edit / delete / activate (in memory)
-- **Settings** — report, notifications, security, backup, appearance panels
+- **Settings** — persisted report preferences and sections, staff session timeout, theme, and accent color
 
 ## Run
 
@@ -35,6 +35,7 @@ image (up to 10 MB); it is stored in
 - Plain HTML/CSS/JS, no framework, no bundler.
 - One external dep: [Chart.js](https://www.chartjs.org/) via CDN.
 - Dashboard, transaction, and menu data are loaded from the local backend; user management is session-only.
+- Settings are stored in MySQL. Session timeout changes apply to new sign-ins; report frequency and recipient values are preferences only because scheduled email delivery is not configured. Email alerts, low-stock alerts, two-factor authentication, and backups are unavailable.
 - Royal Insights answers supported questions from the current dashboard metrics and does not call an external AI service.
 
 ## Files

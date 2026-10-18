@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const { promisify } = require('util');
+const { readAdminSettings } = require('../config/admin-settings');
 
 const router = express.Router();
 const scrypt = promisify(crypto.scrypt);
@@ -113,12 +114,16 @@ router.post('/login', async (req, res) => {
     }
 
     loginAttempts.delete(address);
+    const settings = await readAdminSettings();
     const token = crypto.randomBytes(32).toString('base64url');
     const session = {
         username: user.username,
         displayName: user.displayName,
         role: user.role,
-        expiresAt: now + SESSION_TTL_MS,
+        expiresAt: now + Math.min(
+            SESSION_TTL_MS,
+            settings.security.sessionTimeoutMinutes * 60 * 1000
+        ),
     };
     sessions.set(token, session);
     res.json({ token, user: { username: user.username, displayName: user.displayName, role: user.role }, expiresAt: session.expiresAt });

@@ -5,6 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const db = require('../config/db');
+const { ensureAuditTable } = require('../audit-logs');
+const {
+    SettingsValidationError,
+    normalizeAdminSettings,
+    readAdminSettings,
+    saveAdminSettings,
+} = require('../config/admin-settings');
 
 const router = express.Router();
 
@@ -33,8 +40,51 @@ const imageUpload = multer({
     },
 });
 
+router.get('/settings', async (_req, res) => {
+    try {
+        res.json(await readAdminSettings());
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch admin settings', details: err.message });
+    }
+});
+
+router.put('/settings', async (req, res) => {
+    try {
+        const settings = normalizeAdminSettings(req.body);
+        res.json(await saveAdminSettings(settings));
+    } catch (err) {
+        if (err instanceof SettingsValidationError) {
+            return res.status(400).json({ error: err.message });
+        }
+        res.status(500).json({ error: 'Failed to save admin settings', details: err.message });
+    }
+});
+
 // GET /api/admin/overview — Dashboard stats, charts, and metrics
 router.get('/overview', async (req, res) => {
+    const interval = String(req.query.interval || 'month').toLowerCase();
+    const intervalQueries = {
+        day: {
+            key: 'HOUR(created_at)',
+            where: 'DATE(created_at) = CURRENT_DATE()',
+        },
+        week: {
+            key: "DATE_FORMAT(created_at, '%Y-%m-%d')",
+            where: 'created_at >= CURRENT_DATE() - INTERVAL 6 DAY AND created_at < CURRENT_DATE() + INTERVAL 1 DAY',
+        },
+        month: {
+            key: "DATE_FORMAT(created_at, '%Y-%m-%d')",
+            where: 'YEAR(created_at) = YEAR(CURRENT_DATE()) AND MONTH(created_at) = MONTH(CURRENT_DATE())',
+        },
+        year: {
+            key: "DATE_FORMAT(created_at, '%Y-%m')",
+            where: 'YEAR(created_at) = YEAR(CURRENT_DATE())',
+        },
+    };
+    if (!intervalQueries[interval]) {
+        return res.status(400).json({ error: 'Invalid analytics interval' });
+    }
+
     try {
         // Today's sales & order count
         const [todayStats] = await db.query(`
@@ -69,6 +119,17 @@ router.get('/overview', async (req, res) => {
 
         const bestSeller = topProducts.length ? topProducts[0].name : 'No sales yet';
 
+        const [paymentMethods] = await db.query(`
+            SELECT COALESCE(m.payment_method, IF(m.is_walkin = 1, 'Cash', 'GCash')) AS method,
+                   COUNT(o.order_id) AS transactions,
+                   COALESCE(SUM(o.total_price), 0) AS sales
+            FROM orders o
+            LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
+            WHERE o.status != 'VOIDED' AND DATE(o.created_at) = CURRENT_DATE()
+            GROUP BY method
+            ORDER BY sales DESC
+        `);
+
         // Hourly distribution
         const [hourly] = await db.query(`
             SELECT HOUR(created_at) as hr, 
@@ -80,13 +141,64 @@ router.get('/overview', async (req, res) => {
             ORDER BY hr ASC
         `);
 
-        // Build hour map from 9 AM to 8 PM
-        const hoursLabels = ['9 AM','10 AM','11 AM','12 PM','1 PM','2 PM','3 PM','4 PM','5 PM','6 PM','7 PM','8 PM'];
-        const hourlyData = hoursLabels.map((lbl, idx) => {
-            const hour24 = idx + 9;
-            const match = hourly.find(h => h.hr === hour24);
+        const timelineQuery = intervalQueries[interval];
+        const [timelineRows] = await db.query(`
+            SELECT ${timelineQuery.key} AS period_key,
+                   COUNT(CASE WHEN status != 'VOIDED' THEN order_id END) AS orders,
+                   COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS sales
+            FROM orders
+            WHERE ${timelineQuery.where}
+            GROUP BY period_key
+            ORDER BY period_key ASC
+        `);
+        const timelineByKey = new Map(timelineRows.map(row => [
+            String(row.period_key),
+            { sales: Number(row.sales), orders: Number(row.orders) },
+        ]));
+        const now = new Date();
+        const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        let salesTimeline;
+        if (interval === 'day') {
+            salesTimeline = Array.from({ length: 24 }, (_, hour) => ({
+                label: `${hour % 12 || 12} ${hour >= 12 ? 'PM' : 'AM'}`,
+                key: String(hour),
+                ...(timelineByKey.get(String(hour)) || { sales: 0, orders: 0 }),
+            }));
+        } else if (interval === 'year') {
+            salesTimeline = Array.from({ length: now.getMonth() + 1 }, (_, month) => {
+                const key = `${now.getFullYear()}-${String(month + 1).padStart(2, '0')}`;
+                return {
+                    label: new Date(now.getFullYear(), month, 1).toLocaleString('en-US', { month: 'short' }),
+                    key,
+                    ...(timelineByKey.get(key) || { sales: 0, orders: 0 }),
+                };
+            });
+        } else {
+            const start = interval === 'week'
+                ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)
+                : new Date(now.getFullYear(), now.getMonth(), 1);
+            const days = interval === 'week' ? 7 : now.getDate();
+            salesTimeline = Array.from({ length: days }, (_, offset) => {
+                const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset);
+                const key = dateKey(date);
+                const label = interval === 'week'
+                    ? date.toLocaleString('en-US', { weekday: 'short' }) + ' ' + date.getDate()
+                    : String(date.getDate());
+                return {
+                    label,
+                    key,
+                    ...(timelineByKey.get(key) || { sales: 0, orders: 0 }),
+                };
+            });
+        }
+
+        // Include the full local calendar day so overnight sales are visible too.
+        const hourlyData = Array.from({ length: 24 }, (_, hour) => {
+            const match = hourly.find(row => Number(row.hr) === hour);
+            const time = `${hour % 12 || 12} ${hour >= 12 ? 'PM' : 'AM'}`;
             return {
-                time: lbl,
+                hour,
+                time,
                 sales: match ? Number(match.sales) : 0,
                 orders: match ? Number(match.orders) : 0
             };
@@ -96,7 +208,7 @@ router.get('/overview', async (req, res) => {
         let peakTime = 'None yet';
         if (hourly.some(h => Number(h.orders) > 0)) {
             const maxHour = hourly.reduce((prev, curr) => (Number(curr.orders) > Number(prev.orders) ? curr : prev), hourly[0]);
-            const h = maxHour.hr;
+            const h = Number(maxHour.hr);
             const formatHour = hour => `${hour % 12 || 12}:00 ${hour >= 12 ? 'PM' : 'AM'}`;
             const hFormatted = formatHour(h);
             const hNext = (h + 1) % 24;
@@ -120,7 +232,14 @@ router.get('/overview', async (req, res) => {
                 sold: Number(p.sold),
                 revenue: Number(p.revenue)
             })),
-            hourly: hourlyData
+            paymentMethods: paymentMethods.map(row => ({
+                method: row.method,
+                transactions: Number(row.transactions),
+                sales: Number(row.sales),
+            })),
+            hourly: hourlyData,
+            salesTimeline,
+            salesInterval: interval
         });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch overview', details: err.message });
@@ -130,6 +249,7 @@ router.get('/overview', async (req, res) => {
 // GET /api/admin/transactions — All transactions with full metadata
 router.get('/transactions', async (req, res) => {
     try {
+        await ensureAuditTable();
         const [orders] = await db.query(`
             SELECT o.order_id, o.subtotal, o.total_price, o.order_type, o.created_at, o.status,
                    m.payment_method, m.payment_amount, m.discount_type, m.discount_amount,
@@ -143,15 +263,26 @@ router.get('/transactions', async (req, res) => {
 
         const ids = orders.map(o => o.order_id);
         const [itemRows] = await db.query(`
-            SELECT oi.order_id, oi.quantity, oi.price_at_purchase, pv.size_name, p.name, p.image_url
+            SELECT oi.order_item_id, oi.order_id, oi.variant_id, oi.quantity,
+                   oi.price_at_purchase, pv.size_name, p.name, p.image_url
             FROM order_items oi
             JOIN product_variants pv ON pv.variant_id = oi.variant_id
             JOIN products p ON p.product_id = pv.product_id
             WHERE oi.order_id IN (?)
         `, [ids]);
 
+        const [auditRows] = await db.query(`
+            SELECT audit_id, order_id, order_item_id, variant_id, product_name, size_name,
+                   action, previous_quantity, new_quantity, previous_price, new_price,
+                   previous_status, new_status, source, actor, details, created_at
+            FROM order_item_audit_logs
+            WHERE order_id IN (?)
+            ORDER BY created_at ASC, audit_id ASC
+        `, [ids]);
+
         const list = orders.map(o => {
             const items = itemRows.filter(i => i.order_id === o.order_id);
+            const auditLogs = auditRows.filter(log => log.order_id === o.order_id);
             const itemStrings = items.map(i => `${i.name} (${i.size_name}) x${i.quantity}`);
             return {
                 id: queueNumber(o.order_id),
@@ -159,7 +290,11 @@ router.get('/transactions', async (req, res) => {
                 date: o.created_at,
                 cashierId: o.is_walkin ? 'Cashier #1' : 'Kiosk Self-Order',
                 items: itemStrings.length ? itemStrings : ['No items recorded'],
-                itemDetails: items,
+                itemDetails: items.map(item => ({
+                    ...item,
+                    auditLogs: auditLogs.filter(log => log.variant_id === item.variant_id),
+                })),
+                auditLogs,
                 total: Number(o.total_price),
                 subtotal: Number(o.subtotal),
                 orderType: o.order_type,

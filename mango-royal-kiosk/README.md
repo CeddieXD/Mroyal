@@ -27,3 +27,9 @@ The kiosk server proxies `/api` requests to the backend on port 3000 by default,
 ## Inactivity reset
 
 After 15 seconds without interaction during an order, the kiosk replaces the current screen with a 10-second countdown prompt. Touching the screen resumes the order; if the countdown reaches zero, the cart is cleared and the kiosk returns to the start screen.
+
+## Order item audit history
+
+The backend stores an append-only item audit trail in `order_item_audit_logs`. It records item creation, POS item additions/edits/removals, and each POS or kitchen status transition, along with the item snapshot, before/after values, source, staff actor when available, and timestamp. Audit writes share the order mutation transaction so a failed change cannot be saved without its corresponding log. The admin dashboard exposes each item's history from the history icon in the expanded transaction details.
+
+The backend creates the audit table automatically for existing installations and records a baseline for current order items it has not seen before. Activity from before audit logging was deployed cannot be reconstructed.

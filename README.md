@@ -27,8 +27,10 @@ role-specific sign-in.
    npm start
    ```
 
-   The backend listens on port `3000` by default. Restart an already-running
-   backend after applying these changes so the login routes and role checks load.
+   The backend listens on port `3000` by default. On Windows, launching it again
+   replaces the existing Mango Royal backend process on that port, so the latest
+   code and login routes are loaded without a manual task kill. An unrelated
+   process occupying the port is left untouched and reported as an error.
 
 3. Open three additional PowerShell terminals from the repository root and
    serve each staff app:

@@ -37,7 +37,19 @@
             <div class="dash-grid">
                 <div class="col-left">
                     <div class="card card-sales-chart">
-                        <h3>Sales Analytics</h3>
+                        <div class="sales-chart-head">
+                            <h3>Sales Analytics</h3>
+                            <label class="sales-interval-control" for="sales-interval">
+                                <span>Interval</span>
+                                <select id="sales-interval" aria-label="Sales analytics interval">
+                                    <option value="day">Today · hourly</option>
+                                    <option value="week">Last 7 days</option>
+                                    <option value="month" selected>Month to date · daily</option>
+                                    <option value="year">Year to date · monthly</option>
+                                </select>
+                            </label>
+                        </div>
+                        <p class="sales-chart-summary" id="sales-chart-summary" aria-live="polite"></p>
                         <div class="chart-wrap"><canvas id="chart-sales"></canvas></div>
                     </div>
                     <div class="stat-grid">
@@ -170,7 +182,7 @@
                     <button class="btn btn-primary" id="export-rep-btn">⬇ Export Report</button>
                 </div>
             </div>
-            <div class="card">
+            <div class="card" id="report-sales-summary">
                 <h3>Basic Sales Report</h3>
                 <div class="report-basic">
                     <div class="rep-tile orange"><p>Total Sales</p><p class="big" id="rep-total-sales">₱0</p><p class="sub">Current revenue</p></div>
@@ -178,7 +190,7 @@
                     <div class="rep-tile green"><p>Avg Order Value</p><p class="big" id="rep-avg-val">₱0</p><p class="sub">Per transaction</p></div>
                 </div>
             </div>
-            <div class="card">
+            <div class="card" id="report-product-performance">
                 <h3>Product Performance</h3>
                 <div class="report-basic two">
                     <div class="rep-tile green-flat"><p>Top Selling Product</p><p class="big" id="rep-top-name"></p><p class="sub" id="rep-top-sub"></p></div>
@@ -190,7 +202,15 @@
                     <tbody></tbody>
                 </table>
             </div>
-            <div class="card">
+            <div class="card" id="report-payment-methods">
+                <h3>Payment Methods</h3>
+                <p class="section-sub">Today's transactions by payment type</p>
+                <table class="table" id="rep-payment-table">
+                    <thead><tr><th>Payment method</th><th>Transactions</th><th>Sales</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="card" id="report-hourly-trend">
                 <h3>Time Based Sales</h3>
                 <p class="section-sub">Sales by Hour</p>
                 <div class="chart-wrap tall"><canvas id="chart-hour"></canvas></div>
@@ -233,61 +253,68 @@
         <!-- ============ SETTINGS ============ -->
         <section class="view" id="view-settings">
             <div class="page-head"><h2>System Configuration</h2></div>
+            <form id="admin-settings-form">
             <div class="card">
                 <h3>📄 Report Settings</h3>
                 <div class="form-grid">
-                    <label>Report Frequency<select><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Quarterly</option></select></label>
-                    <label>Default Format<select><option>PDF</option><option>Excel (XLSX)</option><option>CSV</option><option>JSON</option></select></label>
-                    <label class="span2">Recipients (Email)<input type="email" placeholder="manager@mangoroyal.com"><small>Separate multiple emails with commas</small></label>
+                    <label>Report Frequency<select id="setting-report-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option></select></label>
+                    <label>Default Format<select id="setting-report-format"><option value="pdf">PDF (Print)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+                    <label class="span2">Recipients (Email)<input id="setting-report-recipients" type="text" autocomplete="email" placeholder="manager@mangoroyal.com"><small>Separate multiple emails with commas. Saved for future email integration.</small></label>
                 </div>
+                <p class="settings-unavailable-note">Report frequency and recipients are saved preferences; scheduled email delivery is not configured. Export reports manually from the Reports page.</p>
                 <div class="toggle-list">
-                    <div class="toggle-row"><div><b>Sales Summary</b><small>Total sales and transactions</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
-                    <div class="toggle-row"><div><b>Product Performance</b><small>Best and least selling items</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
-                    <div class="toggle-row"><div><b>Payment Methods</b><small>Breakdown by payment type</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
-                    <div class="toggle-row"><div><b>Hourly Sales Trend</b><small>Sales by hour analysis</small></div><label class="switch"><input type="checkbox"><span></span></label></div>
+                    <div class="toggle-row"><div><b>Sales Summary</b><small>Total sales and transactions</small></div><label class="switch"><input type="checkbox" data-report-section="salesSummary"><span></span></label></div>
+                    <div class="toggle-row"><div><b>Product Performance</b><small>Best and least selling items</small></div><label class="switch"><input type="checkbox" data-report-section="productPerformance"><span></span></label></div>
+                    <div class="toggle-row"><div><b>Payment Methods</b><small>Breakdown by payment type</small></div><label class="switch"><input type="checkbox" data-report-section="paymentMethods"><span></span></label></div>
+                    <div class="toggle-row"><div><b>Hourly Sales Trend</b><small>Sales by hour analysis</small></div><label class="switch"><input type="checkbox" data-report-section="hourlySalesTrend"><span></span></label></div>
                 </div>
             </div>
             <div class="card">
                 <h3>🔔 Notifications</h3>
+                <p class="settings-unavailable-note">Email delivery and inventory thresholds are not configured. These alert controls are unavailable.</p>
                 <div class="toggle-list">
-                    <div class="toggle-row"><div><b>Email Notifications</b><small>Receive email updates for transactions</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
-                    <div class="toggle-row"><div><b>Low Stock Alerts</b><small>Get notified when items are running low</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
-                    <div class="toggle-row"><div><b>Daily Reports</b><small>Receive daily sales summaries</small></div><label class="switch"><input type="checkbox"><span></span></label></div>
+                    <div class="toggle-row settings-unavailable"><div><b>Email Notifications</b><small>Requires an email delivery service</small></div><label class="switch"><input type="checkbox" disabled aria-label="Email notifications unavailable"><span></span></label></div>
+                    <div class="toggle-row settings-unavailable"><div><b>Low Stock Alerts</b><small>Requires inventory quantities and alert thresholds</small></div><label class="switch"><input type="checkbox" disabled aria-label="Low stock alerts unavailable"><span></span></label></div>
+                    <div class="toggle-row settings-unavailable"><div><b>Daily Reports</b><small>Requires a report scheduler and email delivery</small></div><label class="switch"><input type="checkbox" disabled aria-label="Daily reports unavailable"><span></span></label></div>
                 </div>
             </div>
             <div class="card">
                 <h3>🛡 Security</h3>
                 <div class="form-grid">
-                    <label>Session Timeout (minutes)<input type="number" value="30"></label>
+                    <label>Session Timeout (minutes)<input id="setting-session-timeout" type="number" min="5" max="480" step="1" required><small>Applies to new staff sign-ins (5–480 minutes)</small></label>
                 </div>
+                <p class="settings-unavailable-note">Two-factor authentication is unavailable until an enrollment and verification flow is configured.</p>
                 <div class="toggle-list">
-                    <div class="toggle-row"><div><b>Two-Factor Authentication</b><small>Add an extra layer of security</small></div><label class="switch"><input type="checkbox"><span></span></label></div>
+                    <div class="toggle-row settings-unavailable"><div><b>Two-Factor Authentication</b><small>Requires a secure second-factor sign-in flow</small></div><label class="switch"><input type="checkbox" disabled aria-label="Two-factor authentication unavailable"><span></span></label></div>
                 </div>
             </div>
             <div class="card">
                 <h3>💾 Backup &amp; Data</h3>
-                <div class="backup-row"><div><b>Last Backup</b><small>May 1, 2026 at 2:00 AM</small></div><button class="btn btn-info">Backup Now</button></div>
+                <p class="settings-unavailable-note">Database backup tooling and scheduling are not configured.</p>
+                <div class="backup-row"><div><b>Last Backup</b><small>Not configured</small></div><button class="btn btn-info" type="button" disabled>Backup Now</button></div>
                 <div class="toggle-list">
-                    <div class="toggle-row"><div><b>Automatic Backups</b><small>Daily at 2:00 AM</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                    <div class="toggle-row settings-unavailable"><div><b>Automatic Backups</b><small>Requires backup tooling and a scheduler</small></div><label class="switch"><input type="checkbox" disabled aria-label="Automatic backups unavailable"><span></span></label></div>
                 </div>
             </div>
             <div class="card">
                 <h3>🎨 Appearance</h3>
                 <div class="form-grid">
-                    <label>Theme<select><option>Light</option><option>Dark</option><option>Auto</option></select></label>
+                    <label>Theme<select id="setting-theme"><option value="light">Light</option><option value="dark">Dark</option><option value="auto">Auto</option></select></label>
                 </div>
                 <p class="section-sub">Primary Color</p>
                 <div class="color-swatches">
-                    <button class="swatch active" style="background:#f97316"></button>
-                    <button class="swatch" style="background:#2563eb"></button>
-                    <button class="swatch" style="background:#16a34a"></button>
-                    <button class="swatch" style="background:#9333ea"></button>
+                    <button class="swatch" type="button" data-color="#f97316" aria-label="Orange accent" style="background:#f97316"></button>
+                    <button class="swatch" type="button" data-color="#2563eb" aria-label="Blue accent" style="background:#2563eb"></button>
+                    <button class="swatch" type="button" data-color="#16a34a" aria-label="Green accent" style="background:#16a34a"></button>
+                    <button class="swatch" type="button" data-color="#9333ea" aria-label="Purple accent" style="background:#9333ea"></button>
                 </div>
             </div>
-            <div class="hstack end">
-                <button class="btn btn-ghost">Cancel</button>
-                <button class="btn btn-primary">Save Changes</button>
+            <div class="hstack end settings-actions">
+                <p id="settings-status" role="status" aria-live="polite"></p>
+                <button class="btn btn-ghost" id="settings-cancel" type="button" disabled>Cancel</button>
+                <button class="btn btn-primary" id="settings-save" type="submit" disabled>Save Changes</button>
             </div>
+            </form>
         </section>
     </main>
 

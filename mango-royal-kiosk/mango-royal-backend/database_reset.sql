@@ -115,6 +115,9 @@ INSERT INTO product_variants VALUES
 -- TABLE: orders
 -- =========================================
 
+DROP TABLE IF EXISTS order_item_audit_logs;
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS pos_order_meta;
 DROP TABLE IF EXISTS orders;
 
 CREATE TABLE orders (
@@ -136,7 +139,6 @@ CREATE TABLE orders (
 -- TABLE: order_items
 -- =========================================
 
-DROP TABLE IF EXISTS order_items;
 DROP TABLE IF EXISTS ai_interactions;
 
 CREATE TABLE order_items (
@@ -155,6 +157,34 @@ CREATE TABLE order_items (
 
 
 -- =========================================
+-- TABLE: order_item_audit_logs
+-- =========================================
+
+CREATE TABLE order_item_audit_logs (
+    audit_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    order_item_id INT NULL,
+    variant_id INT NULL,
+    product_name VARCHAR(100) NOT NULL,
+    size_name VARCHAR(20) NULL,
+    action VARCHAR(32) NOT NULL,
+    previous_quantity INT NULL,
+    new_quantity INT NULL,
+    previous_price DECIMAL(10,2) NULL,
+    new_price DECIMAL(10,2) NULL,
+    previous_status VARCHAR(32) NULL,
+    new_status VARCHAR(32) NULL,
+    source VARCHAR(32) NOT NULL,
+    actor VARCHAR(100) NULL,
+    details JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_order_item_audit_order_time (order_id, created_at),
+    INDEX idx_order_item_audit_variant (order_id, variant_id),
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+
+-- =========================================
 -- TABLE: ai_interactions
 -- =========================================
 
@@ -169,4 +199,17 @@ CREATE TABLE ai_interactions (
     selected_size VARCHAR(20) NULL,
     profile_snapshot JSON NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- =========================================
+-- TABLE: admin_settings
+-- =========================================
+
+DROP TABLE IF EXISTS admin_settings;
+
+CREATE TABLE admin_settings (
+    settings_id TINYINT PRIMARY KEY,
+    settings_json JSON NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

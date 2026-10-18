@@ -3,6 +3,12 @@
 const express = require('express');
 const db = require('../config/db');
 const bus = require('./events');
+const {
+    ensureAuditTable,
+    loadOrderItemSnapshots,
+    writeItemAuditLogs,
+    writeOrderStatusAudit,
+} = require('../audit-logs');
 
 const router = express.Router();
 
@@ -232,47 +238,78 @@ router.post('/orders/:id/verify', async (req, res) => {
     }
     try {
         await metaTableReady;
-        const [orders] = await db.query(
-            'SELECT total_price FROM orders WHERE order_id = ?',
-            [orderId]
-        );
-        if (!orders.length) {
-            return res.status(404).json({ error: 'Order not found' });
+        await ensureAuditTable();
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+        } catch (err) {
+            connection.release();
+            throw err;
         }
-        const orderTotal = Number(orders[0].total_price);
-        const expectedDiscount = discountType ? Math.round(orderTotal * 0.20 * 100) / 100 : 0;
-        if (Math.abs(parsedDiscountAmount - expectedDiscount) > 0.01) {
-            return res.status(400).json({ error: 'Discount amount does not match the selected discount' });
+        let orderTotal;
+        let previousStatus;
+        try {
+            const [orders] = await connection.query(
+                'SELECT total_price, status FROM orders WHERE order_id = ? FOR UPDATE',
+                [orderId]
+            );
+            if (!orders.length) {
+                await connection.rollback();
+                return res.status(404).json({ error: 'Order not found' });
+            }
+            orderTotal = Number(orders[0].total_price);
+            previousStatus = orders[0].status;
+            const expectedDiscount = discountType ? Math.round(orderTotal * 0.20 * 100) / 100 : 0;
+            if (Math.abs(parsedDiscountAmount - expectedDiscount) > 0.01) {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Discount amount does not match the selected discount' });
+            }
+            if (parsedPaymentAmount + 0.001 < orderTotal - expectedDiscount) {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Payment amount is less than the amount due' });
+            }
+            await connection.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VERIFIED, orderId]);
+            if (previousStatus !== STATUS.VERIFIED) {
+                await writeOrderStatusAudit(connection, {
+                    orderId,
+                    previousStatus,
+                    newStatus: STATUS.VERIFIED,
+                    source: 'POS',
+                    actor: req.staff.displayName,
+                });
+            }
+            await connection.query(
+                `INSERT INTO pos_order_meta (
+                    order_id, payment_method, payment_amount, discount_type, discount_amount,
+                    pwd_id_number, senior_name, senior_birthdate
+                 )
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                     payment_method = VALUES(payment_method),
+                     payment_amount = VALUES(payment_amount),
+                     discount_type = VALUES(discount_type),
+                     discount_amount = VALUES(discount_amount),
+                     pwd_id_number = VALUES(pwd_id_number),
+                     senior_name = VALUES(senior_name),
+                     senior_birthdate = VALUES(senior_birthdate)`,
+                [
+                    orderId,
+                    paymentMethod,
+                    parsedPaymentAmount,
+                    discountType,
+                    parsedDiscountAmount,
+                    discountType === 'PWD' ? normalizedPwdId : null,
+                    discountType === 'Senior' ? normalizedSeniorName : null,
+                    discountType === 'Senior' ? seniorBirthdate : null,
+                ]
+            );
+            await connection.commit();
+        } catch (err) {
+            await connection.rollback();
+            throw err;
+        } finally {
+            connection.release();
         }
-        if (parsedPaymentAmount + 0.001 < orderTotal - expectedDiscount) {
-            return res.status(400).json({ error: 'Payment amount is less than the amount due' });
-        }
-        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VERIFIED, orderId]);
-        await db.query(
-            `INSERT INTO pos_order_meta (
-                order_id, payment_method, payment_amount, discount_type, discount_amount,
-                pwd_id_number, senior_name, senior_birthdate
-             )
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-                 payment_method = VALUES(payment_method),
-                 payment_amount = VALUES(payment_amount),
-                 discount_type = VALUES(discount_type),
-                 discount_amount = VALUES(discount_amount),
-                 pwd_id_number = VALUES(pwd_id_number),
-                 senior_name = VALUES(senior_name),
-                 senior_birthdate = VALUES(senior_birthdate)`,
-            [
-                orderId,
-                paymentMethod,
-                parsedPaymentAmount,
-                discountType,
-                parsedDiscountAmount,
-                discountType === 'PWD' ? normalizedPwdId : null,
-                discountType === 'Senior' ? normalizedSeniorName : null,
-                discountType === 'Senior' ? seniorBirthdate : null,
-            ]
-        );
         bus.emit('order:change', { orderId, status: STATUS.VERIFIED, source: 'pos' });
         res.json({ success: true });
     } catch (err) {
@@ -285,12 +322,45 @@ router.post('/orders/:id/void', async (req, res) => {
     const orderId = Number(req.params.id);
     const { reason = '' } = req.body || {};
     try {
-        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VOIDED, orderId]);
-        await db.query(
-            `INSERT INTO pos_order_meta (order_id, void_reason) VALUES (?, ?)
-             ON DUPLICATE KEY UPDATE void_reason = VALUES(void_reason)`,
-            [orderId, reason]
-        );
+        await ensureAuditTable();
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+        } catch (err) {
+            connection.release();
+            throw err;
+        }
+        try {
+            const [orders] = await connection.query(
+                'SELECT status FROM orders WHERE order_id = ? FOR UPDATE',
+                [orderId]
+            );
+            if (!orders.length) {
+                await connection.rollback();
+                return res.status(404).json({ error: 'Order not found' });
+            }
+            await connection.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VOIDED, orderId]);
+            if (orders[0].status !== STATUS.VOIDED) {
+                await writeOrderStatusAudit(connection, {
+                    orderId,
+                    previousStatus: orders[0].status,
+                    newStatus: STATUS.VOIDED,
+                    source: 'POS',
+                    actor: req.staff.displayName,
+                });
+            }
+            await connection.query(
+                `INSERT INTO pos_order_meta (order_id, void_reason) VALUES (?, ?)
+                 ON DUPLICATE KEY UPDATE void_reason = VALUES(void_reason)`,
+                [orderId, reason]
+            );
+            await connection.commit();
+        } catch (err) {
+            await connection.rollback();
+            throw err;
+        } finally {
+            connection.release();
+        }
         bus.emit('order:change');
         res.json({ success: true });
     } catch (err) {
@@ -302,7 +372,40 @@ router.post('/orders/:id/void', async (req, res) => {
 router.post('/orders/:id/reopen', async (req, res) => {
     const orderId = Number(req.params.id);
     try {
-        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.PENDING, orderId]);
+        await ensureAuditTable();
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+        } catch (err) {
+            connection.release();
+            throw err;
+        }
+        try {
+            const [orders] = await connection.query(
+                'SELECT status FROM orders WHERE order_id = ? FOR UPDATE',
+                [orderId]
+            );
+            if (!orders.length) {
+                await connection.rollback();
+                return res.status(404).json({ error: 'Order not found' });
+            }
+            await connection.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.PENDING, orderId]);
+            if (orders[0].status !== STATUS.PENDING) {
+                await writeOrderStatusAudit(connection, {
+                    orderId,
+                    previousStatus: orders[0].status,
+                    newStatus: STATUS.PENDING,
+                    source: 'POS',
+                    actor: req.staff.displayName,
+                });
+            }
+            await connection.commit();
+        } catch (err) {
+            await connection.rollback();
+            throw err;
+        } finally {
+            connection.release();
+        }
         bus.emit('order:change');
         res.json({ success: true });
     } catch (err) {
@@ -318,18 +421,106 @@ router.patch('/orders/:id', async (req, res) => {
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'items required' });
     }
+    const subtotal = items.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0);
     try {
-        const subtotal = items.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
-        await db.query(`DELETE FROM order_items WHERE order_id = ?`, [orderId]);
-        const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
-        await db.query(
-            `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
-            [values]
-        );
-        await db.query(
-            `UPDATE orders SET subtotal = ?, total_price = ? WHERE order_id = ?`,
-            [subtotal, subtotal, orderId]
-        );
+        await ensureAuditTable();
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+        } catch (err) {
+            connection.release();
+            throw err;
+        }
+        try {
+            const [orders] = await connection.query(
+                'SELECT order_id FROM orders WHERE order_id = ? FOR UPDATE',
+                [orderId]
+            );
+            if (!orders.length) {
+                await connection.rollback();
+                return res.status(404).json({ error: 'Order not found' });
+            }
+            const previousItems = await loadOrderItemSnapshots(connection, orderId);
+            const oldByVariant = new Map();
+            for (const item of previousItems) {
+                const existing = oldByVariant.get(item.variant_id) || {
+                    ...item,
+                    quantity: 0,
+                    priceTotal: 0,
+                };
+                existing.quantity += Number(item.quantity);
+                existing.priceTotal += Number(item.quantity) * Number(item.price_at_purchase);
+                oldByVariant.set(item.variant_id, existing);
+            }
+            for (const item of oldByVariant.values()) {
+                item.price = item.priceTotal / item.quantity;
+            }
+
+            await connection.query(`DELETE FROM order_items WHERE order_id = ?`, [orderId]);
+            const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
+            await connection.query(
+                `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
+                [values]
+            );
+            await connection.query(
+                `UPDATE orders SET subtotal = ?, total_price = ? WHERE order_id = ?`,
+                [subtotal, subtotal, orderId]
+            );
+            const currentItems = await loadOrderItemSnapshots(connection, orderId);
+            const newByVariant = new Map();
+            for (const item of currentItems) {
+                const existing = newByVariant.get(item.variant_id) || {
+                    ...item,
+                    quantity: 0,
+                    priceTotal: 0,
+                };
+                existing.quantity += Number(item.quantity);
+                existing.priceTotal += Number(item.quantity) * Number(item.price_at_purchase);
+                newByVariant.set(item.variant_id, existing);
+            }
+            for (const item of newByVariant.values()) {
+                item.price = item.priceTotal / item.quantity;
+            }
+            const auditEntries = [];
+            for (const variantId of new Set([...oldByVariant.keys(), ...newByVariant.keys()])) {
+                const previous = oldByVariant.get(variantId);
+                const current = newByVariant.get(variantId);
+                const previousPrice = previous ? previous.price : null;
+                const newPrice = current ? current.price : null;
+                const previousQuantity = previous ? previous.quantity : null;
+                const newQuantity = current ? current.quantity : null;
+                const changedFields = [];
+                if (previousQuantity !== newQuantity) changedFields.push('quantity');
+                if ((previousPrice == null) !== (newPrice == null)
+                    || (previousPrice != null && Math.abs(previousPrice - newPrice) > 0.001)) {
+                    changedFields.push('unit price');
+                }
+                if (!changedFields.length) continue;
+                const item = current || previous;
+                auditEntries.push({
+                    orderId,
+                    orderItemId: current ? current.order_item_id : previous.order_item_id,
+                    variantId,
+                    productName: item.product_name,
+                    sizeName: item.size_name,
+                    action: previous && current ? 'ITEM_UPDATED' : current ? 'ITEM_ADDED' : 'ITEM_REMOVED',
+                    previousQuantity,
+                    newQuantity,
+                    previousPrice,
+                    newPrice,
+                    source: 'POS',
+                    actor: req.staff.displayName,
+                    details: { changedFields },
+                });
+            }
+            await writeItemAuditLogs(connection, auditEntries);
+            await connection.commit();
+        } catch (err) {
+            await connection.rollback();
+            throw err;
+        } finally {
+            connection.release();
+        }
         res.json({ success: true, subtotal, total: subtotal });
     } catch (err) {
         res.status(500).json({ error: 'Edit failed', details: err.message });
@@ -343,29 +534,60 @@ router.post('/orders/walkin', async (req, res) => {
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'items required' });
     }
+    const subtotal = items.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0);
     try {
-        const [sess] = await db.query(
-            "INSERT INTO sessions (device_id, status) VALUES ('POS_01', 'completed')"
-        );
-        const sessionId = sess.insertId;
+        await ensureAuditTable();
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+        } catch (err) {
+            connection.release();
+            throw err;
+        }
+        let orderId;
+        try {
+            const [sess] = await connection.query(
+                "INSERT INTO sessions (device_id, status) VALUES ('POS_01', 'completed')"
+            );
+            const sessionId = sess.insertId;
 
-        const subtotal = items.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
-        const [ord] = await db.query(
-            `INSERT INTO orders (session_id, subtotal, total_price, order_type, status)
-             VALUES (?, ?, ?, ?, ?)`,
-            [sessionId, subtotal, subtotal, orderType, STATUS.PENDING]
-        );
-        const orderId = ord.insertId;
+            const [ord] = await connection.query(
+                `INSERT INTO orders (session_id, subtotal, total_price, order_type, status)
+                 VALUES (?, ?, ?, ?, ?)`,
+                [sessionId, subtotal, subtotal, orderType, STATUS.PENDING]
+            );
+            orderId = ord.insertId;
 
-        const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
-        await db.query(
-            `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
-            [values]
-        );
-        await db.query(
-            `INSERT INTO pos_order_meta (order_id, is_walkin, payment_method) VALUES (?, 1, 'Cash')`,
-            [orderId]
-        );
+            const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
+            await connection.query(
+                `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
+                [values]
+            );
+            await connection.query(
+                `INSERT INTO pos_order_meta (order_id, is_walkin, payment_method) VALUES (?, 1, 'Cash')`,
+                [orderId]
+            );
+            const createdItems = await loadOrderItemSnapshots(connection, orderId);
+            await writeItemAuditLogs(connection, createdItems.map(item => ({
+                orderId,
+                orderItemId: item.order_item_id,
+                variantId: item.variant_id,
+                productName: item.product_name,
+                sizeName: item.size_name,
+                action: 'ITEM_CREATED',
+                newQuantity: item.quantity,
+                newPrice: item.price_at_purchase,
+                newStatus: STATUS.PENDING,
+                source: 'POS',
+                actor: req.staff.displayName,
+            })));
+            await connection.commit();
+        } catch (err) {
+            await connection.rollback();
+            throw err;
+        } finally {
+            connection.release();
+        }
 
         const queue = queueNumber(orderId);
         bus.emit('order:new', { orderId, queueNumber: queue, source: 'walkin' });

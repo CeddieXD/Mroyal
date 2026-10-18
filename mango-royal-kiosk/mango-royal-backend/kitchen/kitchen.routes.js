@@ -6,6 +6,7 @@
 const express = require('express');
 const db = require('../config/db');
 const bus = require('../pos/events');
+const { ensureAuditTable, writeOrderStatusAudit } = require('../audit-logs');
 
 const router = express.Router();
 
@@ -106,14 +107,44 @@ router.post('/orders/:id/status', async (req, res) => {
         return res.status(400).json({ error: 'Invalid status' });
     }
     try {
-        const [rows] = await db.query(`SELECT status FROM orders WHERE order_id = ?`, [orderId]);
-        if (!rows.length) return res.status(404).json({ error: 'Order not found' });
-        const current = rows[0].status;
-        const allowed = TRANSITIONS[current] || [];
-        if (!allowed.includes(next)) {
-            return res.status(409).json({ error: `Cannot move ${current} → ${next}` });
+        await ensureAuditTable();
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+        } catch (err) {
+            connection.release();
+            throw err;
         }
-        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [next, orderId]);
+        try {
+            const [rows] = await connection.query(
+                `SELECT status FROM orders WHERE order_id = ? FOR UPDATE`,
+                [orderId]
+            );
+            if (!rows.length) {
+                await connection.rollback();
+                return res.status(404).json({ error: 'Order not found' });
+            }
+            const current = rows[0].status;
+            const allowed = TRANSITIONS[current] || [];
+            if (!allowed.includes(next)) {
+                await connection.rollback();
+                return res.status(409).json({ error: `Cannot move ${current} → ${next}` });
+            }
+            await connection.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [next, orderId]);
+            await writeOrderStatusAudit(connection, {
+                orderId,
+                previousStatus: current,
+                newStatus: next,
+                source: 'Kitchen',
+                actor: req.staff.displayName,
+            });
+            await connection.commit();
+        } catch (err) {
+            await connection.rollback();
+            throw err;
+        } finally {
+            connection.release();
+        }
         bus.emit('order:change', { orderId, status: next, source: 'kitchen' });
         res.json({ success: true, status: next });
     } catch (err) {

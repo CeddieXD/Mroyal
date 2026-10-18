@@ -1,8 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const { execFileSync } = require('child_process');
 require('dotenv').config();
 const db = require('./config/db'); // Import the separated DB connection
+const { ensureAuditTable, loadOrderItemSnapshots, writeItemAuditLogs } = require('./audit-logs');
 
 const app = express();
 app.use(cors());
@@ -61,6 +63,7 @@ app.post('/api/orders', async (req, res) => {
     let connection;
     let orderId;
     try {
+        await ensureAuditTable();
         connection = await db.getConnection();
         await connection.beginTransaction();
 
@@ -83,6 +86,20 @@ app.post('/api/orders', async (req, res) => {
             "INSERT INTO Order_Items (order_id, variant_id, quantity, price_at_purchase) VALUES ?",
             [itemValues]
         );
+        const createdItems = await loadOrderItemSnapshots(connection, orderId);
+        await writeItemAuditLogs(connection, createdItems.map(item => ({
+            orderId,
+            orderItemId: item.order_item_id,
+            variantId: item.variant_id,
+            productName: item.product_name,
+            sizeName: item.size_name,
+            action: 'ITEM_CREATED',
+            newQuantity: item.quantity,
+            newPrice: item.price_at_purchase,
+            newStatus: 'PENDING',
+            source: 'Kiosk',
+            actor: 'Customer (Kiosk)',
+        })));
         await connection.commit();
     } catch (err) {
         if (connection) {
@@ -109,4 +126,53 @@ app.post('/api/orders', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+let replacingExistingBackend = false;
+
+server.on('error', err => {
+    if (err.code !== 'EADDRINUSE' || replacingExistingBackend) {
+        console.error(`Backend failed to listen on port ${PORT}:`, err);
+        process.exit(1);
+    }
+
+    replacingExistingBackend = true;
+    try {
+        if (process.platform !== 'win32') {
+            throw new Error('Automatic replacement of an existing backend is supported by the Windows launcher only.');
+        }
+
+        const script = `
+            $ErrorActionPreference = 'Stop'
+            $port = ${Number(PORT)}
+            $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty OwningProcess -Unique)
+            foreach ($listenerPid in $listeners) {
+                if ([int]$listenerPid -eq ${process.pid}) { continue }
+                $listener = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid"
+                if (-not $listener -or $listener.Name -ne 'node.exe' -or $listener.CommandLine -notmatch '(?i)server\\.js') {
+                    throw "Port $port is occupied by an unrelated process (PID $listenerPid); it was not stopped."
+                }
+                Stop-Process -Id ([int]$listenerPid) -Force
+                Write-Output "Stopped existing backend process (PID $listenerPid)."
+            }
+
+            for ($attempt = 0; $attempt -lt 50; $attempt++) {
+                $remaining = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+                if (-not $remaining) { exit 0 }
+                Start-Sleep -Milliseconds 100
+            }
+            throw "Port $port is still occupied after stopping the existing backend."
+        `;
+        const output = execFileSync('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            script,
+        ], { encoding: 'utf8', windowsHide: true });
+        if (output.trim()) console.log(output.trim());
+        server.listen(PORT, () => console.log(`🚀 Replaced backend; server running on port ${PORT}`));
+    } catch (replaceError) {
+        console.error(`Backend could not replace the process on port ${PORT}: ${replaceError.message}`);
+        process.exit(1);
+    }
+});
