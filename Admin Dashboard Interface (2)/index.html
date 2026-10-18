@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mango Royal Admin</title>
+    <link rel="icon" href="MangoRoyalLogo.png">
+    <link rel="stylesheet" href="css/admin.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <aside class="sidebar" id="sidebar">
+        <div class="brand">
+            <img src="MangoRoyalLogo.png" alt="Mango Royal">
+            <div class="brand-text">
+                <h1>Mango Royal</h1>
+                <p>Admin Dashboard</p>
+            </div>
+        </div>
+        <nav>
+            <button class="nav-item active" data-view="dashboard"><span class="ico">▦</span><span>Dashboard</span></button>
+            <button class="nav-item" data-view="transactions"><span class="ico">🧾</span><span>Transactions</span></button>
+            <button class="nav-item" data-view="menu"><span class="ico">🍽</span><span>Menu Management</span></button>
+            <button class="nav-item" data-view="reports"><span class="ico">📄</span><span>Reports</span></button>
+            <button class="nav-item" data-view="users"><span class="ico">👥</span><span>Users</span></button>
+            <button class="nav-item" data-view="settings"><span class="ico">⚙</span><span>Settings</span></button>
+        </nav>
+        <div class="sidebar-foot">
+            <button class="nav-item logout"><span class="ico">⎋</span><span>Logout</span></button>
+        </div>
+    </aside>
+
+    <main class="main">
+        <!-- ============ DASHBOARD ============ -->
+        <section class="view active" id="view-dashboard">
+            <div class="dash-grid">
+                <div class="col-left">
+                    <div class="card card-sales-chart">
+                        <h3>Sales Analytics</h3>
+                        <div class="chart-wrap"><canvas id="chart-sales"></canvas></div>
+                    </div>
+                    <div class="stat-grid">
+                        <div class="card stat"><div class="stat-head"><span>Today's Sales</span><span class="ico green">↗</span></div><p class="stat-big" id="stat-sales"></p></div>
+                        <div class="card stat"><div class="stat-head"><span>Total Orders</span><span class="ico blue">🛒</span></div><p class="stat-big" id="stat-orders"></p></div>
+                        <div class="card stat"><div class="stat-head"><span>Best Seller</span><span class="ico orange">🍽</span></div><p class="stat-med" id="stat-best"></p></div>
+                        <div class="card stat"><div class="stat-head"><span>Peak Time</span><span class="ico purple">⏱</span></div><p class="stat-med" id="stat-peak"></p></div>
+                    </div>
+                </div>
+                <div class="col-right">
+                    <div class="row-top">
+                        <div class="card card-items-chart">
+                            <h3>Items Sold Today</h3>
+                            <div class="chart-wrap"><canvas id="chart-items"></canvas></div>
+                        </div>
+                        <div class="card weather">
+                            <h3>Weather</h3>
+                            <div class="weather-body">
+                                <div class="weather-icon">☁</div>
+                                <p class="temp">32°C</p>
+                                <p class="cond">Partly Cloudy</p>
+                                <div class="weather-list">
+                                    <div><span>Time</span><span id="w-time"></span></div>
+                                    <div><span>Date</span><span id="w-date"></span></div>
+                                    <div><span>Humidity</span><span>68%</span></div>
+                                    <div><span>Location</span><span>Manila, PH</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card ops-card">
+                        <div class="ops-head">
+                            <div>
+                                <h3>Today's Operations</h3>
+                                <p>Order health and service mix</p>
+                            </div>
+                            <span class="today-pill">Today</span>
+                        </div>
+                        <div class="ops-metrics">
+                            <div class="ops-metric">
+                                <span>Average order</span>
+                                <strong id="metric-average-order">₱0</strong>
+                                <small>per non-voided order</small>
+                            </div>
+                            <div class="ops-metric">
+                                <span>In progress</span>
+                                <strong id="metric-in-progress">0</strong>
+                                <small>awaiting completion</small>
+                            </div>
+                            <div class="ops-metric">
+                                <span>Completed</span>
+                                <strong id="metric-completed">0</strong>
+                                <small>ready for pickup</small>
+                            </div>
+                            <div class="ops-metric">
+                                <span>Voided today</span>
+                                <strong id="metric-voided">0</strong>
+                                <small>orders cancelled</small>
+                            </div>
+                        </div>
+                        <div class="order-mix">
+                            <div class="order-mix-head">
+                                <b>Order mix</b>
+                                <span id="order-mix-total">0 active orders</span>
+                            </div>
+                            <div class="mix-bar" aria-label="Dine-in and take-out order mix">
+                                <span class="mix-dine-in" id="mix-dine-in"></span>
+                                <span class="mix-take-out" id="mix-take-out"></span>
+                            </div>
+                            <div class="mix-legend">
+                                <span><i class="legend-dot dine-in"></i>Dine-in <b id="mix-dine-in-count">0</b></span>
+                                <span><i class="legend-dot take-out"></i>Take-out <b id="mix-take-out-count">0</b></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ TRANSACTIONS ============ -->
+        <section class="view" id="view-transactions">
+            <div class="page-head">
+                <h2>Transaction Management</h2>
+                <button class="btn btn-primary" id="export-tx-btn">⬇ Export</button>
+            </div>
+            <div class="stat-row">
+                <div class="card stat"><div class="stat-head"><span>Total Transactions</span><span class="ico blue">🧾</span></div><p class="stat-big" id="tx-count">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Total Amount</span><span class="ico green">↗</span></div><p class="stat-big" id="tx-total">₱0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Average Order</span><span class="ico purple">🛒</span></div><p class="stat-big" id="tx-avg">₱0</p></div>
+            </div>
+            <div class="card filter-bar">
+                <input type="text" id="tx-search" placeholder="🔍 Search by transaction ID or item...">
+                <select id="tx-status"><option value="all">All Status</option><option>Completed</option><option>Pending</option><option>Void</option></select>
+                <select id="tx-payment"><option value="all">All Payment Methods</option><option>Cash</option><option>GCash</option><option>Card</option></select>
+                <select id="tx-time"><option value="all">All Time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="last7days">Last 7 Days</option><option value="last30days">Last 30 Days</option><option value="morning">Morning (6AM-12PM)</option><option value="afternoon">Afternoon (12PM-6PM)</option><option value="evening">Evening (6PM-6AM)</option></select>
+                <select id="tx-day"><option value="all">All Days</option><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select>
+            </div>
+            <div class="card table-card">
+                <table class="table" id="tx-table">
+                    <thead><tr><th>Order ID</th><th>Date &amp; Time</th><th>Cashier</th><th>Items</th><th>Total</th><th>Change</th><th>Status</th><th>Actions</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <p class="empty" id="tx-empty" hidden>No transactions found matching your filters.</p>
+            </div>
+        </section>
+
+        <!-- ============ MENU ============ -->
+        <section class="view" id="view-menu">
+            <div class="page-head" id="menu-page-head">
+                <div class="menu-page-title">
+                    <h2>Menu Management</h2>
+                    <p>Keep your products, prices, and availability up to date.</p>
+                </div>
+                <button class="btn btn-primary" id="menu-add"><span aria-hidden="true">＋</span> Add New Item</button>
+            </div>
+            <div class="menu-toolbar">
+                <div class="chip-row" id="menu-chips" role="group" aria-label="Filter menu by category"></div>
+                <span class="menu-result-count" id="menu-result-count" aria-live="polite"></span>
+            </div>
+            <div class="menu-grid" id="menu-grid" aria-live="polite"></div>
+        </section>
+
+        <!-- ============ REPORTS ============ -->
+        <section class="view" id="view-reports">
+            <div class="page-head">
+                <h2>Sales Report &amp; Analytics</h2>
+                <div class="hstack">
+                    <select id="report-range"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This Week</option><option value="month">This Month</option><option value="year">This Year</option></select>
+                    <button class="btn btn-ghost" id="eod-report-btn">📄 End-of-Day (Z-Reading)</button>
+                    <button class="btn btn-primary" id="export-rep-btn">⬇ Export Report</button>
+                </div>
+            </div>
+            <div class="card">
+                <h3>Basic Sales Report</h3>
+                <div class="report-basic">
+                    <div class="rep-tile orange"><p>Total Sales</p><p class="big" id="rep-total-sales">₱0</p><p class="sub">Current revenue</p></div>
+                    <div class="rep-tile blue"><p>Transactions</p><p class="big" id="rep-total-tx">0</p><p class="sub">Completed orders</p></div>
+                    <div class="rep-tile green"><p>Avg Order Value</p><p class="big" id="rep-avg-val">₱0</p><p class="sub">Per transaction</p></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>Product Performance</h3>
+                <div class="report-basic two">
+                    <div class="rep-tile green-flat"><p>Top Selling Product</p><p class="big" id="rep-top-name"></p><p class="sub" id="rep-top-sub"></p></div>
+                    <div class="rep-tile red-flat"><p>Least Selling Product</p><p class="big" id="rep-low-name"></p><p class="sub" id="rep-low-sub"></p></div>
+                </div>
+                <p class="section-sub">QTY Sold per Item</p>
+                <table class="table" id="rep-table">
+                    <thead><tr><th>Rank</th><th>Product</th><th>Qty</th><th>Revenue</th><th>Performance</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="card">
+                <h3>Time Based Sales</h3>
+                <p class="section-sub">Sales by Hour</p>
+                <div class="chart-wrap tall"><canvas id="chart-hour"></canvas></div>
+                <div id="rep-day-wrap" hidden>
+                    <p class="section-sub">Sales by Day (This Week)</p>
+                    <div class="chart-wrap tall"><canvas id="chart-day"></canvas></div>
+                </div>
+            </div>
+            <div class="card insights">
+                <h3>📈 Key Insights &amp; Recommendations</h3>
+                <div class="insights-grid" id="insights-container">
+                    <div class="insight"><div class="ins-ico green">↗</div><div><b>Sales Performance</b><p id="ins-sales">Tracking active orders and revenue.</p><span class="tag green" id="ins-sales-tag">Live Tracking</span></div></div>
+                    <div class="insight"><div class="ins-ico orange">⏱</div><div><b>Peak Hours</b><p id="ins-peak">Analyzing hourly transaction trends.</p><span class="tag orange" id="ins-peak-tag">Hourly Analysis</span></div></div>
+                    <div class="insight"><div class="ins-ico purple">🍽</div><div><b>Top Product</b><p id="ins-top">Calculating customer favorite products.</p><span class="tag purple" id="ins-top-tag">Top Performer</span></div></div>
+                    <div class="insight"><div class="ins-ico blue">👥</div><div><b>Staffing & Operations</b><p id="ins-staff">Ensuring smooth workflow from POS to Kitchen.</p><span class="tag blue" id="ins-staff-tag">Operations</span></div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ USERS ============ -->
+        <section class="view" id="view-users">
+            <div class="page-head">
+                <h2>User &amp; Role Management</h2>
+                <button class="btn btn-primary" id="user-add">+ Add New User</button>
+            </div>
+            <div class="stat-row four">
+                <div class="card stat"><div class="stat-head"><span>Total Users</span><span class="ico blue">👥</span></div><p class="stat-big" id="usr-total">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Active</span><span class="ico green">👥</span></div><p class="stat-big" id="usr-active">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Inactive</span><span class="ico red">👥</span></div><p class="stat-big" id="usr-inactive">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Roles</span><span class="ico purple">⚙</span></div><p class="stat-big">4</p></div>
+            </div>
+            <div class="card table-card">
+                <table class="table" id="user-table">
+                    <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ============ SETTINGS ============ -->
+        <section class="view" id="view-settings">
+            <div class="page-head"><h2>System Configuration</h2></div>
+            <div class="card">
+                <h3>📄 Report Settings</h3>
+                <div class="form-grid">
+                    <label>Report Frequency<select><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Quarterly</option></select></label>
+                    <label>Default Format<select><option>PDF</option><option>Excel (XLSX)</option><option>CSV</option><option>JSON</option></select></label>
+                    <label class="span2">Recipients (Email)<input type="email" placeholder="manager@mangoroyal.com"><small>Separate multiple emails with commas</small></label>
+                </div>
+                <div class="toggle-list">
+                    <div class="toggle-row"><div><b>Sales Summary</b><small>Total sales and transactions</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                    <div class="toggle-row"><div><b>Product Performance</b><small>Best and least selling items</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                    <div class="toggle-row"><div><b>Payment Methods</b><small>Breakdown by payment type</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                    <div class="toggle-row"><div><b>Hourly Sales Trend</b><small>Sales by hour analysis</small></div><label class="switch"><input type="checkbox"><span></span></label></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>🔔 Notifications</h3>
+                <div class="toggle-list">
+                    <div class="toggle-row"><div><b>Email Notifications</b><small>Receive email updates for transactions</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                    <div class="toggle-row"><div><b>Low Stock Alerts</b><small>Get notified when items are running low</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                    <div class="toggle-row"><div><b>Daily Reports</b><small>Receive daily sales summaries</small></div><label class="switch"><input type="checkbox"><span></span></label></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>🛡 Security</h3>
+                <div class="form-grid">
+                    <label>Session Timeout (minutes)<input type="number" value="30"></label>
+                </div>
+                <div class="toggle-list">
+                    <div class="toggle-row"><div><b>Two-Factor Authentication</b><small>Add an extra layer of security</small></div><label class="switch"><input type="checkbox"><span></span></label></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>💾 Backup &amp; Data</h3>
+                <div class="backup-row"><div><b>Last Backup</b><small>May 1, 2026 at 2:00 AM</small></div><button class="btn btn-info">Backup Now</button></div>
+                <div class="toggle-list">
+                    <div class="toggle-row"><div><b>Automatic Backups</b><small>Daily at 2:00 AM</small></div><label class="switch"><input type="checkbox" checked><span></span></label></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>🎨 Appearance</h3>
+                <div class="form-grid">
+                    <label>Theme<select><option>Light</option><option>Dark</option><option>Auto</option></select></label>
+                </div>
+                <p class="section-sub">Primary Color</p>
+                <div class="color-swatches">
+                    <button class="swatch active" style="background:#f97316"></button>
+                    <button class="swatch" style="background:#2563eb"></button>
+                    <button class="swatch" style="background:#16a34a"></button>
+                    <button class="swatch" style="background:#9333ea"></button>
+                </div>
+            </div>
+            <div class="hstack end">
+                <button class="btn btn-ghost">Cancel</button>
+                <button class="btn btn-primary">Save Changes</button>
+            </div>
+        </section>
+    </main>
+
+    <div class="assistant-dock" id="royal-assistant" hidden>
+        <button class="assistant-capsule" id="assistant-open" type="button" aria-expanded="false" aria-controls="assistant-panel">
+            <span class="assistant-mark" aria-hidden="true">R</span>
+            <span class="assistant-capsule-copy"><b>Royal Insights</b><small>Ask about today's business</small></span>
+            <span class="assistant-capsule-arrow" aria-hidden="true">↑</span>
+        </button>
+        <section class="assistant-panel" id="assistant-panel" aria-label="Royal Insights chat" aria-hidden="true">
+            <header class="assistant-header">
+                <div class="assistant-title">
+                    <span class="assistant-mark" aria-hidden="true">R</span>
+                    <div><b>Royal Insights</b><small>Answers from your live dashboard data</small></div>
+                </div>
+                <button class="assistant-close" id="assistant-close" type="button" aria-label="Minimize Royal Insights">−</button>
+            </header>
+            <div class="assistant-messages" id="assistant-messages" aria-live="polite" aria-relevant="additions">
+                <div class="assistant-welcome" id="assistant-welcome">
+                    <span class="assistant-welcome-mark" aria-hidden="true">✦</span>
+                    <h2>What would you like to know?</h2>
+                    <p>Ask about today's sales, orders, best sellers, or busy hours.</p>
+                </div>
+                <div class="assistant-prompts" id="assistant-prompts">
+                    <button type="button">How are sales today?</button>
+                    <button type="button">What is my best seller?</button>
+                    <button type="button">How many orders are in progress?</button>
+                </div>
+            </div>
+            <form class="assistant-composer" id="assistant-form">
+                <input id="assistant-input" type="text" autocomplete="off" aria-label="Ask Royal Insights" placeholder="Ask about your business...">
+                <button type="submit" aria-label="Send message">↑</button>
+            </form>
+            <p class="assistant-disclaimer">Insights reflect dashboard data for today; this is not an external AI service.</p>
+        </section>
+    </div>
+
+    <!-- Modal container -->
+    <div class="modal" id="modal">
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-body" id="modal-body"></div>
+    </div>
+
+    <script src="js/status-check.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+/* css/review.css */
+#review-screen { background: var(--bg-cream); }
+.rev-wrapper {
+    width: 100%; height: 100%;
+    display: grid;
+    grid-template-rows: 84px 1fr;
+}
+.rev-header {
+    background: white;
+    display: flex;
+    align-items: center;
+    padding: 0 30px;
+    gap: 20px;
+    box-shadow: var(--shadow-sm);
+}
+.rev-header h1 {
+    flex: 1;
+    text-align: center;
+    color: var(--mango-red);
+    font-size: 1.7rem;
+    font-weight: 900;
+}
+.rev-order-type {
+    background: var(--mango-red);
+    color: white;
+    padding: 8px 18px;
+    border-radius: 999px;
+    font-weight: 700;
+}
+.rev-body {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 24px;
+    padding: 24px 30px;
+    overflow: hidden;
+}
+.rev-items {
+    background: white;
+    border-radius: 24px;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: var(--shadow-sm);
+}
+.rev-summary {
+    background: white;
+    border-radius: 24px;
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column;
+    height: fit-content;
+}
+.rev-summary h3 {
+    color: var(--mango-red);
+    font-size: 1.25rem;
+    font-weight: 900;
+    margin-bottom: 16px;
+}
+.rev-summary .summary-line {
+    padding: 8px 0;
+    font-size: 1rem;
+    color: var(--text-dark);
+}
+.rev-summary .summary-line.total {
+    font-size: 1.5rem;
+    color: var(--mango-red);
+    font-weight: 900;
+    border-top: 1px dashed rgba(0,0,0,0.1);
+    padding-top: 14px;
+    margin-top: 10px;
+}
+.rev-checkout { margin-top: 20px; font-size: 1.15rem; padding: 20px; }
+.rev-add-more { margin-top: 8px; }
+
+/* Row style similar to cart */
+.rev-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px;
+    background: var(--bg-cream);
+    border-radius: 18px;
+}
+.rev-row .thumb {
+    width: 72px; height: 72px; min-width: 72px;
+    border-radius: 16px;
+    background: white;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+}
+.rev-row .thumb img { width: 60px; }
+.rev-row .info { flex: 1; }
+.rev-row .info h4 { color: var(--text-dark); font-size: 1.05rem; margin-bottom: 4px; }
+.rev-row .info .meta { color: var(--muted); font-size: 0.85rem; }
+.rev-row .price { color: var(--mango-red); font-weight: 800; font-size: 1.1rem; min-width: 90px; text-align: right; }

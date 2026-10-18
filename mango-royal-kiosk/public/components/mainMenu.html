@@ -1,0 +1,66 @@
+<div class="menu-layout">
+
+    <header class="menu-topbar">
+        <div class="header-logo">
+            <img src="assets/img/MangoRoyalLogo.png" alt="Logo">
+            <span>Mango Royal</span>
+        </div>
+
+        <div class="search-bar-wrapper">
+            <img src="assets/icons/search-icon.png" class="search-icon" alt="">
+            <input type="text" id="menu-search" placeholder="Search shakes...">
+        </div>
+
+        <div class="order-type-pill" id="order-type-pill">
+            <span class="ot-label">Order Type</span>
+            <span class="ot-value" id="ot-value">Dine In</span>
+            <span class="ot-change">Change</span>
+        </div>
+    </header>
+
+    <aside class="category-rail">
+        <h3>Menu</h3>
+        <div class="cat-item active" data-category="BEST_SELLERS">
+            <span class="cat-emoji">⭐</span>
+            <span>Best Sellers</span>
+        </div>
+        <div class="cat-item" data-category="PREMIUM">
+            <span class="cat-emoji">💎</span>
+            <span>Premium</span>
+        </div>
+        <div class="cat-item" data-category="BASIC">
+            <span class="cat-emoji">🥭</span>
+            <span>Basics</span>
+        </div>
+        <div class="cat-item" data-category="SEASONAL">
+            <span class="cat-emoji">✨</span>
+            <span>Seasonal</span>
+        </div>
+    </aside>
+
+    <section class="product-section">
+        <div class="product-grid"></div>
+    </section>
+
+    <aside class="cart-sidebar" id="cart-sidebar">
+        <div class="cart-side-header">
+            <h3>Your Order</h3>
+            <span class="cart-count" id="cart-count">0 items</span>
+        </div>
+
+        <div class="cart-items-list" id="cart-items-list">
+            <div class="cart-empty">
+                <div class="cart-empty-icon">🥭</div>
+                <p>Your cart is empty</p>
+                <small>Tap a shake to add it here</small>
+            </div>
+        </div>
+
+        <div class="cart-summary">
+            <div class="summary-line"><span>Subtotal</span> <span id="subtotal">₱0.00</span></div>
+            <div class="summary-line total"><span>Total</span> <span id="total-price">₱0.00</span></div>
+            <button class="checkout-btn btn-primary" id="checkout-btn" disabled>Review Order →</button>
+        </div>
+    </aside>
+
+</div>

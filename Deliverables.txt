@@ -1,0 +1,12 @@
+Tangible Outputs
+
+Acknowledgement Receipt
+Order Summary
+Order Number (Printed for Customers and Digital for Authorities)
+Kitchen Display Information (incoming, preparing, and complete/ready)
+End-of-Day Report
+Transaction Logs & Sales Report
+Dashboard Data
+Chatbot Responses (Transaction & Sales analysis)
+Menu Products
+User Account & Role Information (user list, assigned roles, account status)

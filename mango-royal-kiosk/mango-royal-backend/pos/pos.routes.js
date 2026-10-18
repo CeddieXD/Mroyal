@@ -1,0 +1,287 @@
+// POS module — endpoints consumed by the Mango Royal POS lite frontend.
+// Reuses the shared mysql2 pool from ../config/db.
+const express = require('express');
+const db = require('../config/db');
+const bus = require('./events');
+
+const router = express.Router();
+
+// SSE — pushes a nudge whenever an order changes so the POS refreshes instantly.
+router.get('/events', (req, res) => {
+    res.set({
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+    });
+    res.flushHeaders();
+    res.write(`event: hello\ndata: {"ok":true}\n\n`);
+
+    const send = (type) => (payload) => {
+        res.write(`event: ${type}\ndata: ${JSON.stringify(payload || {})}\n\n`);
+    };
+    const onNew    = send('order:new');
+    const onChange = send('order:change');
+    bus.on('order:new', onNew);
+    bus.on('order:change', onChange);
+
+    const keepalive = setInterval(() => res.write(`: ping\n\n`), 25000);
+    req.on('close', () => {
+        clearInterval(keepalive);
+        bus.off('order:new', onNew);
+        bus.off('order:change', onChange);
+    });
+});
+
+const STATUS = { PENDING: 'PENDING', VERIFIED: 'VERIFIED', VOIDED: 'VOIDED' };
+
+// Match the queue-number format the kiosk shows customers (server.js: 'A' + last 3 digits of order_id).
+const queueNumber = (orderId) => 'A' + String(orderId).padStart(3, '0').slice(-3);
+
+// Turn a bare "MangoRoyal.png" into a URL the POS frontend can load.
+const imageUrl = (name) => name ? `/images/${name}` : null;
+
+// Idempotent side table for POS-only metadata (payment, discount, void reason, walk-in flag)
+async function ensureMetaTable() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS pos_order_meta (
+            order_id INT PRIMARY KEY,
+            payment_method VARCHAR(20) DEFAULT 'Cash',
+            payment_amount DECIMAL(10,2) NULL,
+            discount_type VARCHAR(20) NULL,
+            discount_amount DECIMAL(10,2) DEFAULT 0,
+            void_reason VARCHAR(255) NULL,
+            is_walkin TINYINT(1) DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (order_id) REFERENCES orders(order_id)
+        )
+    `);
+}
+ensureMetaTable().catch(err => console.error('[pos] meta table init failed:', err.message));
+
+// Load orders + items for the given status filter
+async function loadOrders(status) {
+    const [orderRows] = await db.query(
+        `SELECT o.order_id, o.subtotal, o.total_price, o.order_type, o.created_at, o.status,
+                m.payment_method, m.payment_amount, m.discount_type, m.discount_amount,
+                m.void_reason, m.is_walkin
+         FROM orders o
+         LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
+         WHERE o.status = ?
+         ORDER BY o.created_at DESC`,
+        [status]
+    );
+    if (!orderRows.length) return [];
+
+    const ids = orderRows.map(o => o.order_id);
+    const [itemRows] = await db.query(
+        `SELECT oi.order_item_id, oi.order_id, oi.variant_id, oi.quantity, oi.price_at_purchase,
+                pv.size_name, p.product_id, p.name, p.image_url
+         FROM order_items oi
+         JOIN product_variants pv ON pv.variant_id = oi.variant_id
+         JOIN products p ON p.product_id = pv.product_id
+         WHERE oi.order_id IN (?)`,
+        [ids]
+    );
+
+    return orderRows.map(o => ({
+        orderId: queueNumber(o.order_id),
+        rawId: o.order_id,
+        status: o.status,
+        timestamp: new Date(o.created_at).toISOString().replace('T', ' ').slice(0, 19),
+        orderType: o.order_type,
+        subtotal: Number(o.subtotal),
+        total: Number(o.total_price),
+        paymentMethod: o.payment_method || (o.is_walkin ? 'Cash' : 'GCash'),
+        paymentAmount: o.payment_amount != null ? Number(o.payment_amount) : null,
+        discountType: o.discount_type,
+        discountAmount: o.discount_amount != null ? Number(o.discount_amount) : 0,
+        voidReason: o.void_reason,
+        isWalkIn: !!o.is_walkin,
+        items: itemRows
+            .filter(i => i.order_id === o.order_id)
+            .map(i => ({
+                id: i.order_item_id,
+                productId: i.product_id,
+                variantId: i.variant_id,
+                name: i.name,
+                image: imageUrl(i.image_url),
+                size: i.size_name,
+                price: Number(i.price_at_purchase),
+                quantity: i.quantity,
+            })),
+    }));
+}
+
+// ---------- ROUTES ----------
+
+// GET /api/pos/orders?status=PENDING|VERIFIED|VOIDED
+router.get('/orders', async (req, res) => {
+    const status = (req.query.status || 'PENDING').toUpperCase();
+    if (!STATUS[status]) return res.status(400).json({ error: 'Invalid status' });
+    try {
+        res.json(await loadOrders(status));
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch orders', details: err.message });
+    }
+});
+
+// GET /api/pos/menu — flat product+variant list used by walk-in and edit modals
+router.get('/menu', async (req, res) => {
+    try {
+        const [rows] = await db.query(`
+            SELECT p.product_id, p.name, p.description, p.image_url, c.category_name,
+                   pv.variant_id, pv.size_name, pv.price
+            FROM products p
+            JOIN product_variants pv ON pv.product_id = p.product_id
+            JOIN categories c ON c.category_id = p.category_id
+            WHERE p.is_available = TRUE
+            ORDER BY p.product_id, pv.price
+        `);
+        // Group by product
+        const map = new Map();
+        for (const r of rows) {
+            if (!map.has(r.product_id)) {
+                map.set(r.product_id, {
+                    id: r.product_id,
+                    name: r.name,
+                    description: r.description,
+                    image: imageUrl(r.image_url),
+                    category: r.category_name,
+                    sizes: [],
+                });
+            }
+            map.get(r.product_id).sizes.push({
+                variantId: r.variant_id,
+                name: r.size_name,
+                price: Number(r.price),
+            });
+        }
+        const list = Array.from(map.values()).map(p => ({
+            ...p,
+            basePrice: Math.min(...p.sizes.map(s => s.price)),
+        }));
+        res.json(list);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch menu', details: err.message });
+    }
+});
+
+// POST /api/pos/orders/:id/verify — payment + optional PWD/Senior discount
+router.post('/orders/:id/verify', async (req, res) => {
+    const orderId = Number(req.params.id);
+    const { paymentAmount, paymentMethod = 'Cash', discountType = null, discountAmount = 0 } = req.body || {};
+    try {
+        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VERIFIED, orderId]);
+        await db.query(
+            `INSERT INTO pos_order_meta (order_id, payment_method, payment_amount, discount_type, discount_amount)
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                 payment_method = VALUES(payment_method),
+                 payment_amount = VALUES(payment_amount),
+                 discount_type = VALUES(discount_type),
+                 discount_amount = VALUES(discount_amount)`,
+            [orderId, paymentMethod, paymentAmount, discountType, discountAmount]
+        );
+        bus.emit('order:change', { orderId, status: STATUS.VERIFIED, source: 'pos' });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Verify failed', details: err.message });
+    }
+});
+
+// POST /api/pos/orders/:id/void — with reason
+router.post('/orders/:id/void', async (req, res) => {
+    const orderId = Number(req.params.id);
+    const { reason = '' } = req.body || {};
+    try {
+        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VOIDED, orderId]);
+        await db.query(
+            `INSERT INTO pos_order_meta (order_id, void_reason) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE void_reason = VALUES(void_reason)`,
+            [orderId, reason]
+        );
+        bus.emit('order:change');
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Void failed', details: err.message });
+    }
+});
+
+// POST /api/pos/orders/:id/reopen — move Verified back to Pending
+router.post('/orders/:id/reopen', async (req, res) => {
+    const orderId = Number(req.params.id);
+    try {
+        await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.PENDING, orderId]);
+        bus.emit('order:change');
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Reopen failed', details: err.message });
+    }
+});
+
+// PATCH /api/pos/orders/:id — replace items (edit flow)
+// body: { items: [{ variantId, quantity, price }] }
+router.patch('/orders/:id', async (req, res) => {
+    const orderId = Number(req.params.id);
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'items required' });
+    }
+    try {
+        const subtotal = items.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
+        await db.query(`DELETE FROM order_items WHERE order_id = ?`, [orderId]);
+        const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
+        await db.query(
+            `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
+            [values]
+        );
+        await db.query(
+            `UPDATE orders SET subtotal = ?, total_price = ? WHERE order_id = ?`,
+            [subtotal, subtotal, orderId]
+        );
+        res.json({ success: true, subtotal, total: subtotal });
+    } catch (err) {
+        res.status(500).json({ error: 'Edit failed', details: err.message });
+    }
+});
+
+// POST /api/pos/orders/walkin — create a new walk-in order
+// body: { orderType?, items: [{ variantId, quantity, price }] }
+router.post('/orders/walkin', async (req, res) => {
+    const { orderType = 'Dine-in', items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'items required' });
+    }
+    try {
+        const [sess] = await db.query(
+            "INSERT INTO sessions (device_id, status) VALUES ('POS_01', 'completed')"
+        );
+        const sessionId = sess.insertId;
+
+        const subtotal = items.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
+        const [ord] = await db.query(
+            `INSERT INTO orders (session_id, subtotal, total_price, order_type, status)
+             VALUES (?, ?, ?, ?, ?)`,
+            [sessionId, subtotal, subtotal, orderType, STATUS.PENDING]
+        );
+        const orderId = ord.insertId;
+
+        const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
+        await db.query(
+            `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
+            [values]
+        );
+        await db.query(
+            `INSERT INTO pos_order_meta (order_id, is_walkin, payment_method) VALUES (?, 1, 'Cash')`,
+            [orderId]
+        );
+
+        const queue = queueNumber(orderId);
+        bus.emit('order:new', { orderId, queueNumber: queue, source: 'walkin' });
+        res.json({ success: true, orderId, queueNumber: queue, subtotal, total: subtotal });
+    } catch (err) {
+        res.status(500).json({ error: 'Walk-in create failed', details: err.message });
+    }
+});
+
+module.exports = router;

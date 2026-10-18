@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mango Royal POS</title>
+    <link rel="stylesheet" href="css/pos.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo">MR</div>
+            <div>
+                <h1>Mango Royal POS</h1>
+                <p class="subtitle">Order Management</p>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <span id="today" class="today"></span>
+            <button id="logout-btn" class="btn btn-danger">Logout</button>
+        </div>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-status="PENDING">
+            Incoming <span class="badge badge-yellow" id="count-PENDING">0</span>
+        </button>
+        <button class="tab" data-status="VERIFIED">
+            Verified <span class="badge badge-green" id="count-VERIFIED">0</span>
+        </button>
+        <button class="tab" data-status="VOIDED">
+            Void <span class="badge badge-gray" id="count-VOIDED">0</span>
+        </button>
+    </nav>
+
+    <div class="toolbar">
+        <input type="search" id="search" placeholder="Search by Order Number…">
+        <button id="new-walkin-btn" class="btn btn-brand">+ New Walk-in Order</button>
+        <button id="refresh-btn" class="btn btn-ghost" title="Refresh">↻</button>
+    </div>
+
+    <main id="orders-grid" class="orders-grid"></main>
+    <p id="empty-state" class="empty hidden">No orders in this tab.</p>
+
+    <div id="modal-root"></div>
+
+    <script src="js/status-check.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

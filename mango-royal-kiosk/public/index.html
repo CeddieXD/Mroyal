@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1024, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#D31C1C">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/assets/icons/kiosk-pwa.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/assets/img/MangoRoyalLogo.png">
+    <title>Mango Royal Kiosk</title>
+
+    <link rel="stylesheet" href="css/index.css">
+    <link rel="stylesheet" href="css/splash.css">
+    <link rel="stylesheet" href="css/orderType.css">
+    <link rel="stylesheet" href="css/mainMenu.css">
+    <link rel="stylesheet" href="css/productDetail.css">
+    <link rel="stylesheet" href="css/cart.css">
+    <link rel="stylesheet" href="css/review.css">
+    <link rel="stylesheet" href="css/payment.css">
+    <link rel="stylesheet" href="css/queue.css">
+</head>
+
+<body>
+    <div class="kiosk-frame">
+        <div id="splash-screen" class="screen"></div>
+        <div id="intro" class="screen hidden"></div>
+        <div id="order-type" class="screen hidden"></div>
+        <main id="main-menu" class="screen hidden"></main>
+        <div id="product-detail" class="detail-modal hidden"></div>
+        <div id="review-screen" class="screen hidden"></div>
+        <div id="payment-screen" class="screen hidden"></div>
+        <div id="queue-screen" class="screen hidden"></div>
+        <div id="idle-timeout-modal" class="idle-timeout-modal hidden" role="dialog" aria-modal="true" aria-labelledby="idle-timeout-title" aria-describedby="idle-timeout-instruction">
+            <div class="idle-timeout-card">
+                <div class="idle-timeout-icon" aria-hidden="true">⏱</div>
+                <p class="idle-timeout-eyebrow">Are you still there?</p>
+                <h2 id="idle-timeout-title"><span id="idle-countdown">10</span><span class="idle-timeout-unit">seconds</span></h2>
+                <p id="idle-timeout-instruction">Your order will reset soon. Touch anywhere to continue ordering.</p>
+                <div class="idle-timeout-track" aria-hidden="true">
+                    <span id="idle-countdown-progress"></span>
+                </div>
+                <p class="idle-timeout-hint">Touch the screen to keep your order</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/status-check.js"></script>
+    <script src="js/pwa.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

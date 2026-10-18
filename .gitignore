@@ -1,0 +1,22 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+
+# Dependencies and generated files
+**/node_modules/
+**/npm-debug.log*
+**/coverage/
+**/dist/
+**/build/
+*.log
+Thumbs.db
+Desktop.ini

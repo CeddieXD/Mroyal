@@ -1,0 +1,23 @@
+<div class="q-wrapper">
+    <div class="q-card">
+        <div class="q-check">✓</div>
+        <h1>Order Placed!</h1>
+        <p class="q-sub">Please proceed to the counter to pay and pick up your order.</p>
+
+        <div class="q-number-box">
+            <span class="q-label">Your Queue Number</span>
+            <span class="q-number" id="queue-number">—</span>
+        </div>
+
+        <p class="q-instr" id="q-instr">Please pay at the cashier.</p>
+
+        <div class="q-countdown">
+            Returning to home in <span id="q-countdown">15</span>s
+        </div>
+
+        <div style="display:flex;gap:12px;justify-content:center;">
+            <button class="btn btn-primary" id="q-print" style="padding:10px 24px;background:#e67e22;color:white;border-radius:20px;font-weight:700;border:none;cursor:pointer;">🖨 Print Receipt</button>
+            <button class="btn btn-ghost q-done" id="q-done">Done</button>
+        </div>
+    </div>
+</div>

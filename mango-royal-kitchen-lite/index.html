@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mango Royal Kitchen</title>
+    <link rel="stylesheet" href="css/kitchen.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo">MR</div>
+            <div>
+                <h1>Mango Royal Kitchen</h1>
+                <p class="subtitle">Order Management</p>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <div class="bell" id="bell" hidden>
+                <span aria-hidden="true">🔔</span>
+                <span class="bell-count" id="bell-count">0</span>
+            </div>
+            <span id="today" class="today"></span>
+            <button id="refresh-btn" class="btn btn-ghost" title="Refresh">↻</button>
+        </div>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-filter="ALL">
+            All Orders <span class="badge badge-gray" id="count-ALL">0</span>
+        </button>
+        <button class="tab" data-filter="VERIFIED">
+            Incoming <span class="badge badge-yellow" id="count-VERIFIED">0</span>
+        </button>
+        <button class="tab" data-filter="PREPARING">
+            Preparing <span class="badge badge-blue" id="count-PREPARING">0</span>
+        </button>
+        <button class="tab" data-filter="READY">
+            Ready <span class="badge badge-green" id="count-READY">0</span>
+        </button>
+    </nav>
+
+    <main id="board" class="board"></main>
+
+    <div id="empty-state" class="empty hidden">
+        <div class="empty-icon">✓</div>
+        <p>No orders in this category</p>
+    </div>
+
+    <audio id="ding" preload="auto"
+           src="data:audio/wav;base64,UklGRoQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YWAAAAA="></audio>
+
+    <script src="js/status-check.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

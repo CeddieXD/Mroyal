@@ -1,0 +1,80 @@
+/* css/payment.css */
+#payment-screen { background: var(--bg-cream); }
+.pay-wrapper {
+    width: 100%; height: 100%;
+    display: grid;
+    grid-template-rows: 84px 1fr auto;
+}
+.pay-header {
+    background: white;
+    display: flex; align-items: center;
+    padding: 0 30px; gap: 20px;
+    box-shadow: var(--shadow-sm);
+}
+.pay-header h1 {
+    flex: 1; text-align: center;
+    color: var(--mango-red);
+    font-size: 1.7rem; font-weight: 900;
+}
+.pay-total-mini {
+    background: var(--mango-yellow);
+    color: var(--text-dark);
+    padding: 8px 20px;
+    border-radius: 999px;
+    font-weight: 900;
+    font-size: 1.05rem;
+}
+.pay-body {
+    padding: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 30px;
+}
+.pay-card {
+    background: white;
+    border: 3px solid transparent;
+    border-radius: 28px;
+    padding: 50px 40px;
+    min-width: 380px;
+    min-height: 300px;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 14px;
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    text-align: center;
+}
+.pay-card.selected {
+    border-color: var(--mango-red);
+    box-shadow: 0 12px 32px rgba(211,28,28,0.18);
+}
+.pay-icon { font-size: 5rem; }
+.pay-card h2 {
+    color: var(--mango-red);
+    font-size: 1.6rem;
+    font-weight: 900;
+}
+.pay-card p { color: var(--muted); font-size: 1rem; }
+
+.pay-footer {
+    background: white;
+    padding: 20px 40px 28px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    box-shadow: 0 -6px 20px rgba(0,0,0,0.05);
+}
+.pay-total-row {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    font-size: 1.4rem;
+    font-weight: 900;
+    color: var(--mango-red);
+    padding-right: 20px;
+}
+.pay-confirm {
+    min-width: 280px;
+    font-size: 1.2rem;
+    padding: 20px 40px;
+}
