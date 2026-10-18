@@ -20,18 +20,25 @@ mango-royal-pos-lite/          ← THIS project (staff POS frontend)
 
 ## Running
 
-1. Start the shared middleware (from `mango-royal-kiosk/mango-royal-backend/`):
+Follow the repository [setup and staff sign-in guide](../README.md) to configure
+the shared backend, start all staff apps, and use the development credentials.
+The POS requires the `cashier` account. Sign in again after restarting the
+backend; each staff app has its own browser session.
+
+For a standalone POS run, start the shared middleware (from
+`mango-royal-kiosk/mango-royal-backend/`):
    ```bash
    node server.js
    ```
    Serves on `http://localhost:3000`.
 
-2. Serve this folder statically. Any static server works, e.g.:
+2. Serve this folder with a static server. Any static server works, e.g.:
    ```bash
    npx serve .
    ```
-   or open `index.html` directly. If the API is not on `localhost:3000`, set
-   `window.POS_API_BASE = 'http://your-host:port'` before `js/app.js` loads.
+   If the API is not on the same hostname at port `3000`, set
+   `window.POS_API_BASE = 'http://your-host:port'` before the app loads. By
+   default, the backend host is inferred from the hostname used to open the POS.
 
 ## POS endpoints (all under `/api/pos`)
 
@@ -47,6 +54,7 @@ mango-royal-pos-lite/          ← THIS project (staff POS frontend)
 
 ## Notes
 
-- Backend creates a `pos_order_meta` side table on startup (payment/discount/void reason). The existing kiosk schema is untouched.
+- Backend creates or upgrades a `pos_order_meta` side table on startup (payment, discount, discount ID details, and void reason). The existing kiosk schema is untouched.
+- Payment verification separates the amount due from the discount, captures the PWD ID number or Senior citizen name and birthdate, and calculates remaining balance/change. Discount ID details are stored with POS order metadata and are not included in the normal order-list response.
 - Kiosk `POST /api/orders` still works unchanged — those orders default to `status = 'PENDING'` and show up in this POS immediately.
 - Frontend polls every 15 s; hit the refresh button (↻) for an immediate update.

@@ -1,0 +1,107 @@
+.mr-auth-root {
+    position: fixed;
+    z-index: 10000;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow-y: auto;
+    padding: 24px;
+    background:
+        radial-gradient(ellipse at 14% 14%, rgba(249, 115, 22, .17), transparent 38%),
+        linear-gradient(145deg, #f8fafc, #fff7ed);
+    color: #172033;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.mr-auth-card {
+    width: min(100%, 430px);
+    padding: 34px;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    background: #fff;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, .14);
+}
+.mr-auth-brand {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    margin-bottom: 27px;
+}
+.mr-auth-mark {
+    display: grid;
+    width: 48px;
+    height: 48px;
+    place-items: center;
+    border-radius: 15px;
+    background: linear-gradient(145deg, #f97316, #f59e0b);
+    color: white;
+    font-size: 18px;
+    font-weight: 850;
+    letter-spacing: -.05em;
+}
+.mr-auth-brand-name { font-size: 14px; font-weight: 800; }
+.mr-auth-brand-app { margin-top: 3px; color: #64748b; font-size: 12px; }
+.mr-auth-card h1 { margin: 0; color: #0f172a; font-size: 24px; letter-spacing: -.035em; }
+.mr-auth-subtitle { margin: 8px 0 24px; color: #64748b; font-size: 14px; line-height: 1.5; }
+.mr-auth-field { display: grid; gap: 7px; margin: 15px 0; }
+.mr-auth-field label { color: #334155; font-size: 13px; font-weight: 700; }
+.mr-auth-field input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 46px;
+    padding: 11px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 9px;
+    background: white;
+    color: #0f172a;
+    font: inherit;
+    font-size: 14px;
+}
+.mr-auth-field input:focus {
+    outline: 3px solid rgba(249, 115, 22, .17);
+    border-color: #f97316;
+}
+.mr-auth-submit {
+    width: 100%;
+    min-height: 46px;
+    margin-top: 8px;
+    border: 0;
+    border-radius: 9px;
+    background: linear-gradient(110deg, #f97316, #f59e0b);
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 750;
+}
+.mr-auth-submit:disabled { cursor: wait; opacity: .65; }
+.mr-auth-error {
+    margin: 12px 0 0;
+    color: #b91c1c;
+    font-size: 13px;
+    line-height: 1.45;
+}
+.mr-auth-demo {
+    margin-top: 21px;
+    padding: 11px 12px;
+    border-radius: 9px;
+    background: #fff7ed;
+    color: #9a3412;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.mr-auth-logout {
+    min-height: 36px;
+    padding: 7px 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #334155;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+}
+.mr-auth-logout:hover { border-color: #f97316; color: #c2410c; }
+@media (max-width: 480px) {
+    .mr-auth-root { padding: 16px; }
+    .mr-auth-card { padding: 26px 22px; }
+}

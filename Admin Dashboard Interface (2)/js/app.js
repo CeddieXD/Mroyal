@@ -9,7 +9,7 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
 }[char]));
 
 // API Base URL (defaults to http://localhost:3000)
-const API_BASE = window.ADMIN_API_BASE || 'http://localhost:3000';
+const API_BASE = window.ADMIN_API_BASE || `${window.location.protocol}//${window.location.hostname}:3000`;
 
 /* ---------- State ---------- */
 let overviewData = {
@@ -479,65 +479,124 @@ $('#menu-add').addEventListener('click', () => openMenuModal(null));
 function openMenuModal(item) {
     const isNew = !item;
     const it = item || { id:'', name:'', description:'', category:'BEST_SELLERS', price:{tall:120,grande:145}, available:true, image:'MangoRoyal.png' };
+    const existingImage = it.image
+        ? (it.image.startsWith('http')
+            ? it.image
+            : `${API_BASE}/images/${encodeURIComponent(it.image.replace(/^\/?images\//, ''))}`)
+        : `${API_BASE}/images/MangoRoyal.png`;
     openModal(`${isNew ? 'Add New' : 'Edit'} Menu Item`, `
         <div class="form-grid">
-            <label class="span2">Product Name<input id="m-name" value="${it.name}" placeholder="e.g. Mango Caramel"></label>
-            <label class="span2">Description<input id="m-desc" value="${it.description||''}" placeholder="Short product summary"></label>
+            <label class="span2">Product Name<input id="m-name" value="${escapeHtml(it.name)}" placeholder="e.g. Mango Caramel"></label>
+            <label class="span2">Description<input id="m-desc" value="${escapeHtml(it.description||'')}" placeholder="Short product summary"></label>
             <label>Category<select id="m-cat">
                 ${['BEST_SELLERS','PREMIUM','BASIC','SEASONAL'].map(c => `<option value="${c}" ${c===it.category?'selected':''}>${categoryLabels[c]}</option>`).join('')}
             </select></label>
-            <label>Image Filename<input id="m-img" value="${it.image||'MangoRoyal.png'}" placeholder="MangoRoyal.png"></label>
+            <div class="menu-image-upload span2">
+                <label for="m-image-file">Product image</label>
+                <div class="menu-image-upload-row">
+                    <img id="m-image-preview" src="${escapeHtml(existingImage)}" alt="Current product image">
+                    <div class="menu-image-upload-controls">
+                        <input id="m-image-file" type="file" accept="image/png,image/jpeg,image/webp">
+                        <span id="m-image-name" class="menu-image-name">${escapeHtml(it.image || 'MangoRoyal.png')}</span>
+                        <small>PNG, JPG, or WebP · up to 10 MB. Stored in the shared product image assets.</small>
+                    </div>
+                </div>
+            </div>
             <label>Tall Price (₱)<input type="number" id="m-tall" value="${it.price?.tall||120}"></label>
             <label>Grande Price (₱)<input type="number" id="m-grande" value="${it.price?.grande||145}"></label>
             <label class="span2" style="flex-direction:row;align-items:center;gap:10px">
                 <input type="checkbox" id="m-avail" ${it.available?'checked':''} style="width:18px;height:18px"> 
                 <span>Mark as Available for Ordering</span>
             </label>
+            <p id="m-error" class="menu-image-error span2" role="alert"></p>
         </div>
     `, [
         { label:'Cancel', cls:'btn-ghost', action: closeModal },
         { label:'Save Item', cls:'btn-primary', action: async () => {
             const name = $('#m-name').value.trim();
             if (!name) return alert('Product name is required');
-            const updated = {
-                name,
-                description: $('#m-desc').value.trim(),
-                category: $('#m-cat').value,
-                image: $('#m-img').value.trim() || 'MangoRoyal.png',
-                price: { tall: +$('#m-tall').value || 120, grande: +$('#m-grande').value || 145 },
-                available: $('#m-avail').checked,
-            };
+            const saveButton = $('#modal [data-mb="1"]');
+            const error = $('#m-error');
+            saveButton.disabled = true;
+            error.textContent = '';
+            try {
+                let image = it.image || 'MangoRoyal.png';
+                const selectedFile = $('#m-image-file').files[0];
+                if (selectedFile) {
+                    const formData = new FormData();
+                    formData.append('image', selectedFile);
+                    const uploadResponse = await fetch(`${API_BASE}/api/admin/menu/images`, {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    const uploadResult = await uploadResponse.json().catch(() => ({}));
+                    if (!uploadResponse.ok) {
+                        throw new Error(uploadResult.error || `Image upload failed (HTTP ${uploadResponse.status}).`);
+                    }
+                    image = uploadResult.filename;
+                }
+                const updated = {
+                    name,
+                    description: $('#m-desc').value.trim(),
+                    category: $('#m-cat').value,
+                    image,
+                    price: { tall: +$('#m-tall').value || 120, grande: +$('#m-grande').value || 145 },
+                    available: $('#m-avail').checked,
+                };
 
-            if (isNew) {
-                try {
-                    const res = await fetch(`${API_BASE}/api/admin/menu`, {
+                if (isNew) {
+                    const response = await fetch(`${API_BASE}/api/admin/menu`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(updated)
                     });
-                    const resJson = await res.json();
-                    updated.id = String(resJson.product_id || Date.now());
-                } catch (e) {
-                    updated.id = String(Date.now());
-                }
-                menuItems.push(updated);
-            } else {
-                updated.id = it.id;
-                menuItems = menuItems.map(x => x.id === it.id ? updated : x);
-                try {
-                    await fetch(`${API_BASE}/api/admin/menu/${it.id}`, {
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(result.error || `Save failed (HTTP ${response.status}).`);
+                    updated.id = String(result.product_id);
+                    menuItems.push(updated);
+                } else {
+                    updated.id = it.id;
+                    const response = await fetch(`${API_BASE}/api/admin/menu/${it.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(updated)
                     });
-                } catch (e) {
-                    console.warn('Update failed on server', e);
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(result.error || `Update failed (HTTP ${response.status}).`);
+                    menuItems = menuItems.map(x => x.id === it.id ? updated : x);
                 }
+                closeModal();
+                renderMenu();
+            } catch (e) {
+                error.textContent = e.message || 'Could not save the menu item.';
+            } finally {
+                if (saveButton.isConnected) saveButton.disabled = false;
             }
-            closeModal();
-            renderMenu();
         }}
     ]);
+    const imageInput = $('#m-image-file');
+    imageInput.addEventListener('change', () => {
+        const file = imageInput.files[0];
+        if (!file) return;
+        const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+        const error = $('#m-error');
+        if (!allowedTypes.includes(file.type) || file.size > 10 * 1024 * 1024) {
+            imageInput.value = '';
+            error.textContent = file.size > 10 * 1024 * 1024
+                ? 'Image must be 10 MB or smaller.'
+                : 'Choose a PNG, JPG, or WebP image.';
+            return;
+        }
+        error.textContent = '';
+        $('#m-image-name').textContent = file.name;
+        const preview = $('#m-image-preview');
+        const previewUrl = URL.createObjectURL(file);
+        preview.onload = () => {
+            URL.revokeObjectURL(previewUrl);
+            preview.onload = null;
+        };
+        preview.src = previewUrl;
+    });
 }
 
 /* ---------- Reports ---------- */

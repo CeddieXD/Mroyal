@@ -1438,6 +1438,33 @@ body.dashboard-active #view-dashboard { padding-bottom: 84px; }
     outline: none;
     border-color: var(--brand);
 }
+.menu-image-upload { min-width: 0; }
+.menu-image-upload > label {
+    display: block; margin-bottom: 6px; font-size: 12px;
+    font-weight: 600; color: var(--ink-2);
+}
+.menu-image-upload-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: #f8fafc;
+}
+.menu-image-upload-row > img {
+    width: 84px; height: 84px; flex: 0 0 84px; object-fit: contain;
+    border-radius: 6px; background: #fff;
+}
+.menu-image-upload-controls {
+    display: grid; gap: 6px; min-width: 0; font-size: 12px;
+}
+.menu-image-upload-controls input[type="file"] {
+    width: 100%; padding: 6px; background: #fff;
+}
+.menu-image-name {
+    overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap;
+}
+.menu-image-upload-controls small { color: var(--muted); font-weight: 400; }
+.menu-image-error { min-height: 0; margin: 0; color: #b91c1c; font-size: 12px; }
+.menu-image-error:empty { display: none; }
+.modal-foot .btn:disabled { cursor: wait; opacity: 0.65; }
 
 .toggle-list { display: flex; flex-direction: column; gap: 6px; }
 .toggle-row {

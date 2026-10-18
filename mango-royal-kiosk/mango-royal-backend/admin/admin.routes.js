@@ -1,11 +1,37 @@
 // Admin module — backend API for Mango Royal Admin Dashboard
 const express = require('express');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const db = require('../config/db');
 
 const router = express.Router();
 
 const queueNumber = (orderId) => 'A' + String(orderId).padStart(3, '0').slice(-3);
 const imageUrl = (name) => name ? `/images/${name}` : null;
+const imageDirectory = path.join(__dirname, '..', '..', 'public', 'assets', 'img');
+const imageExtensions = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+};
+fs.mkdirSync(imageDirectory, { recursive: true });
+const imageUpload = multer({
+    storage: multer.diskStorage({
+        destination: imageDirectory,
+        filename: (req, file, callback) => {
+            callback(null, `${crypto.randomUUID()}${imageExtensions[file.mimetype]}`);
+        },
+    }),
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0 },
+    fileFilter: (req, file, callback) => {
+        if (!imageExtensions[file.mimetype]) {
+            return callback(new Error('Upload a PNG, JPG, or WebP image.'));
+        }
+        callback(null, true);
+    },
+});
 
 // GET /api/admin/overview — Dashboard stats, charts, and metrics
 router.get('/overview', async (req, res) => {
@@ -189,6 +215,63 @@ router.get('/menu', async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch menu', details: err.message });
     }
+});
+
+// POST /api/admin/menu/images — Store product image in the shared kiosk/POS image directory.
+router.post('/menu/images', (req, res, next) => {
+    imageUpload.single('image')(req, res, err => {
+        if (!err) return next();
+        const status = err instanceof multer.MulterError
+            ? (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400)
+            : (err.code ? 500 : 400);
+        res.status(status).json({ error: err.message });
+    });
+}, async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Choose an image to upload.' });
+    let fileHandle;
+    try {
+        fileHandle = await fs.promises.open(req.file.path, 'r');
+        const header = Buffer.alloc(12);
+        const { bytesRead } = await fileHandle.read(header, 0, header.length, 0);
+        await fileHandle.close();
+        fileHandle = null;
+        const isPng = bytesRead >= 8
+            && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+        const isJpeg = bytesRead >= 3
+            && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+        const isWebp = bytesRead >= 12
+            && header.toString('ascii', 0, 4) === 'RIFF'
+            && header.toString('ascii', 8, 12) === 'WEBP';
+        const matchesType = (req.file.mimetype === 'image/png' && isPng)
+            || (req.file.mimetype === 'image/jpeg' && isJpeg)
+            || (req.file.mimetype === 'image/webp' && isWebp);
+        if (!matchesType) {
+            await fs.promises.unlink(req.file.path);
+            return res.status(400).json({ error: 'The selected file is not a valid PNG, JPG, or WebP image.' });
+        }
+    } catch (err) {
+        if (fileHandle) {
+            const openFile = fileHandle;
+            fileHandle = null;
+            try {
+                await openFile.close();
+            } catch (closeError) {
+                console.error('[admin] failed to close uploaded image:', closeError.message);
+            }
+        }
+        try {
+            await fs.promises.unlink(req.file.path);
+        } catch (cleanupError) {
+            console.error('[admin] failed to remove invalid uploaded image:', cleanupError.message);
+        }
+        console.error('[admin] product image validation failed:', err.message);
+        return res.status(500).json({ error: 'Failed to validate uploaded image.' });
+    }
+    res.status(201).json({
+        success: true,
+        filename: req.file.filename,
+        url: imageUrl(req.file.filename),
+    });
 });
 
 // PATCH /api/admin/menu/:id/toggle — Toggle product availability in DB

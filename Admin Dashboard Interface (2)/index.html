@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="staff-auth-pending">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mango Royal Admin</title>
     <link rel="icon" href="MangoRoyalLogo.png">
     <link rel="stylesheet" href="css/admin.css">
+    <style>html.staff-auth-pending body > :not(#mr-auth-root) { visibility: hidden !important; }</style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -331,6 +332,22 @@
     </div>
 
     <script src="js/status-check.js"></script>
-    <script src="js/app.js"></script>
+    <script>
+        window.MANGO_ROYAL_STAFF_APP = {
+            apiBase: window.ADMIN_API_BASE || `${window.location.protocol}//${window.location.hostname}:3000`,
+            role: 'admin',
+            appLabel: 'Admin Dashboard',
+            appScript: 'js/app.js',
+            module: false,
+            sessionKey: 'mango-royal-admin-session',
+        };
+        const authScript = document.createElement('script');
+        authScript.src = `${window.MANGO_ROYAL_STAFF_APP.apiBase}/staff-auth/staff-auth.js`;
+        authScript.onerror = () => {
+            document.documentElement.classList.remove('staff-auth-pending');
+            document.body.textContent = 'The sign-in service is unavailable. Start the backend and reload this page.';
+        };
+        document.body.appendChild(authScript);
+    </script>
 </body>
 </html>

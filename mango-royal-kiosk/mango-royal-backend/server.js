@@ -1,20 +1,24 @@
 const express = require('express');
 const cors = require('cors');
-const db = require('./config/db'); // Import the separated DB connection
+const path = require('path');
 require('dotenv').config();
+const db = require('./config/db'); // Import the separated DB connection
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+const { router: authRouter, requireRole } = require('./auth/auth.routes');
+app.use('/api/auth', authRouter);
+app.use('/staff-auth', express.static(path.join(__dirname, 'staff-auth')));
+
 // POS module — endpoints for the Mango Royal POS lite frontend
-app.use('/api/pos', require('./pos/pos.routes'));
-app.use('/api/kitchen', require('./kitchen/kitchen.routes'));
-app.use('/api/admin', require('./admin/admin.routes'));
+app.use('/api/pos', requireRole('pos'), require('./pos/pos.routes'));
+app.use('/api/kitchen', requireRole('kitchen'), require('./kitchen/kitchen.routes'));
+app.use('/api/admin', requireRole('admin'), require('./admin/admin.routes'));
 const posBus = require('./pos/events');
 
 // Serve kiosk product images to the POS frontend
-const path = require('path');
 app.use('/images', express.static(path.join(__dirname, '..', 'public', 'assets', 'img')));
 
 // --- ROUTES ---

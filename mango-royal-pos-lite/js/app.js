@@ -137,6 +137,11 @@ function handleAction(act, order) {
         catch (e) { alert('Void failed: ' + e.message); }
     });
     if (act === 'print') {
+        const discountAmount = Number(order.discountAmount || 0);
+        const amountDue = Math.max(0, order.total - discountAmount);
+        const amountChange = order.paymentAmount == null
+            ? null
+            : Math.max(0, order.paymentAmount - amountDue);
         const w = window.open('', '_blank', 'width=380,height=580');
         if (!w) return window.print();
         w.document.write(`
@@ -168,8 +173,11 @@ function handleAction(act, order) {
                     ${order.items.map(i => `<tr><td>${i.quantity}x ${i.name} (${i.size})</td><td class="right">₱${(i.price * i.quantity).toFixed(2)}</td></tr>`).join('')}
                 </table>
                 <div class="line"></div>
-                <div class="total-box">TOTAL AMOUNT: ₱${order.total.toFixed(2)}</div>
-                ${order.discountAmount ? `<p style="color:#16a34a">Discount: -₱${order.discountAmount.toFixed(2)}</p>` : ''}
+                <p>Order total: ₱${order.total.toFixed(2)}</p>
+                ${discountAmount ? `<p style="color:#16a34a">Discount: -₱${discountAmount.toFixed(2)}</p>` : ''}
+                <div class="total-box">TOTAL TO BE PAID: ₱${amountDue.toFixed(2)}</div>
+                <p>Cash received: ${order.paymentAmount == null ? '—' : `₱${order.paymentAmount.toFixed(2)}`}</p>
+                ${amountChange == null ? '' : `<p>Change: ₱${amountChange.toFixed(2)}</p>`}
                 <p>Payment: ${order.paymentMethod || 'Cash'}</p>
                 <div class="line"></div>
                 <p>Thank you for your purchase!</p>
@@ -210,7 +218,6 @@ function wire() {
 
     $('#search').addEventListener('input', e => { state.search = e.target.value; renderOrders(); });
     $('#refresh-btn').addEventListener('click', () => refresh());
-    $('#logout-btn').addEventListener('click', () => { if (confirm('Logout?')) alert('Logged out.'); });
 
     $('#new-walkin-btn').addEventListener('click', () => {
         ensureMenu().then(menu => openWalkInModal(menu, async (items, orderType) => {

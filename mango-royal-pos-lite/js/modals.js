@@ -22,30 +22,40 @@ export function openVerifyModal(order, onConfirm) {
           <div class="summary-box">
             <div class="row"><span>Order ID</span><span>${order.orderId}</span></div>
             ${order.items.map((i, idx) => `<div class="row"><span><span class="ln">${idx + 1}.</span> ${i.quantity}× ${i.name} (${i.size})</span><span>${peso(i.price * i.quantity)}</span></div>`).join('')}
-            <div class="row"><span>Subtotal</span><span id="v-subtotal">${peso(order.total)}</span></div>
-            <div class="row" id="v-discount-row" style="display:none;color:#166534"><span>Discount (20%)</span><span id="v-discount">-₱0.00</span></div>
-            <div class="row total"><span>Total</span><span id="v-total">${peso(order.total)}</span></div>
+            <div class="row"><span>Order total</span><span>${peso(order.total)}</span></div>
+            <div class="row" id="v-discount-row" style="display:none;color:#166534"><span id="v-discount-label">Discount (20%)</span><span id="v-discount">-₱0.00</span></div>
+            <div class="row total"><span>Total to be paid</span><span id="v-total">${peso(order.total)}</span></div>
           </div>
 
-          <div class="field">
-            <label><input type="checkbox" id="v-hasdisc"> PWD / Senior Discount (20%)</label>
-            <div id="v-disc-block" style="display:none;margin-top:8px">
+          <section class="verify-section">
+            <label class="verify-discount-toggle"><input type="checkbox" id="v-hasdisc"> Apply PWD / Senior discount (20%)</label>
+            <div id="v-disc-block" class="discount-details hidden">
               <div class="chip-row">
-                <button class="chip active" data-disc="PWD">PWD</button>
-                <button class="chip" data-disc="Senior">Senior</button>
+                <button type="button" class="chip active" data-disc="PWD">PWD</button>
+                <button type="button" class="chip" data-disc="Senior">Senior</button>
+              </div>
+              <div id="v-pwd-fields" class="discount-fields">
+                <label for="v-pwd-id">PWD ID number *</label>
+                <input type="text" id="v-pwd-id" maxlength="100" autocomplete="off" placeholder="Enter the PWD ID number">
+              </div>
+              <div id="v-senior-fields" class="discount-fields hidden">
+                <label for="v-senior-name">Senior citizen name *</label>
+                <input type="text" id="v-senior-name" maxlength="150" autocomplete="name" placeholder="Enter the name on the ID">
+                <label for="v-senior-birthdate">Birthdate *</label>
+                <input type="date" id="v-senior-birthdate" autocomplete="bday">
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="field">
-            <label>Payment Amount ₱ *</label>
-            <input type="number" id="v-amount" step="0.01" placeholder="0.00" autofocus>
-            <div class="chip-row" style="margin-top:6px">
-              ${[50, 100, 200, 500, 1000].map(p => `<button class="chip" data-preset="${p}">₱${p}</button>`).join('')}
+          <section class="verify-section payment-calculator">
+            <label for="v-amount">Cash received (₱) *</label>
+            <input type="number" id="v-amount" min="0" step="0.01" inputmode="decimal" placeholder="0.00" autofocus>
+            <div class="chip-row payment-presets">
+              <button type="button" class="chip" data-preset="exact">Exact amount</button>
+              ${[50, 100, 200, 500, 1000].map(p => `<button type="button" class="chip" data-preset="${p}">₱${p}</button>`).join('')}
             </div>
-          </div>
-
-          <div id="v-change" style="display:none;padding:8px;background:#dcfce7;border-radius:6px;color:#166534;font-size:13px;margin-bottom:8px"></div>
+            <div id="v-change" class="payment-change hidden" aria-live="polite"></div>
+          </section>
           <div id="v-err" class="error-msg"></div>
         </div>
         <div class="modal-footer">
@@ -63,40 +73,82 @@ export function openVerifyModal(order, onConfirm) {
         const disc = hasDisc ? order.total * 0.20 : 0;
         const total = order.total - disc;
         q('#v-discount-row').style.display = hasDisc ? 'flex' : 'none';
+        q('#v-discount-label').textContent = `${discountType} discount (20%)`;
         q('#v-discount').textContent = `-${peso(disc)}`;
         q('#v-total').textContent = peso(total);
-        q('#v-disc-block').style.display = hasDisc ? 'block' : 'none';
+        q('#v-disc-block').classList.toggle('hidden', !hasDisc);
+        q('#v-pwd-fields').classList.toggle('hidden', !hasDisc || discountType !== 'PWD');
+        q('#v-senior-fields').classList.toggle('hidden', !hasDisc || discountType !== 'Senior');
 
         const amt = parseFloat(q('#v-amount').value);
-        if (!isNaN(amt) && amt >= total) {
-            q('#v-change').style.display = 'block';
+        if (Number.isFinite(amt) && amt > 0 && amt >= total) {
+            q('#v-change').classList.remove('hidden');
+            q('#v-change').classList.remove('is-short');
             q('#v-change').textContent = `Change: ${peso(amt - total)}`;
-        } else q('#v-change').style.display = 'none';
+        } else if (Number.isFinite(amt) && amt > 0) {
+            q('#v-change').classList.remove('hidden');
+            q('#v-change').classList.add('is-short');
+            q('#v-change').textContent = `Remaining: ${peso(total - amt)}`;
+        } else {
+            q('#v-change').classList.add('hidden');
+            q('#v-change').classList.remove('is-short');
+            q('#v-change').textContent = '';
+        }
         return { total, disc, hasDisc };
     }
 
-    q('#v-hasdisc').addEventListener('change', recompute);
+    q('#v-hasdisc').addEventListener('change', () => {
+        q('#v-err').textContent = '';
+        recompute();
+    });
     q('#v-amount').addEventListener('input', () => { q('#v-err').textContent = ''; recompute(); });
     modal.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
-        q('#v-amount').value = b.dataset.preset; recompute();
+        q('#v-amount').value = b.dataset.preset === 'exact'
+            ? recompute().total.toFixed(2)
+            : b.dataset.preset;
+        q('#v-err').textContent = '';
+        recompute();
     }));
     modal.querySelectorAll('[data-disc]').forEach(b => b.addEventListener('click', () => {
         discountType = b.dataset.disc;
         modal.querySelectorAll('[data-disc]').forEach(x => x.classList.toggle('active', x === b));
+        q('#v-err').textContent = '';
+        recompute();
     }));
 
     q('#v-cancel').addEventListener('click', closeModal);
     q('#v-ok').addEventListener('click', () => {
+        q('#v-err').textContent = '';
         const { total, disc, hasDisc } = recompute();
         const amt = parseFloat(q('#v-amount').value);
         if (isNaN(amt) || amt <= 0) return (q('#v-err').textContent = 'Enter a valid payment amount.');
         if (amt < total) return (q('#v-err').textContent = `Insufficient payment (${peso(amt)} < ${peso(total)}).`);
+        const pwdIdNumber = q('#v-pwd-id').value.trim();
+        const seniorName = q('#v-senior-name').value.trim();
+        const seniorBirthdate = q('#v-senior-birthdate').value;
+        if (hasDisc && discountType === 'PWD' && !pwdIdNumber) {
+            return (q('#v-err').textContent = 'Enter the PWD ID number.');
+        }
+        if (hasDisc && discountType === 'Senior' && (!seniorName || !seniorBirthdate)) {
+            return (q('#v-err').textContent = 'Enter the senior citizen name and birthdate.');
+        }
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        if (hasDisc && discountType === 'Senior' && seniorBirthdate > today) {
+            return (q('#v-err').textContent = 'Birthdate cannot be in the future.');
+        }
         onConfirm({
             paymentAmount: amt,
             paymentMethod: 'Cash',
             discountType: hasDisc ? discountType : null,
             discountAmount: disc,
+            pwdIdNumber: hasDisc && discountType === 'PWD' ? pwdIdNumber : null,
+            seniorName: hasDisc && discountType === 'Senior' ? seniorName : null,
+            seniorBirthdate: hasDisc && discountType === 'Senior' ? seniorBirthdate : null,
         });
+    });
+    ['#v-pwd-id', '#v-senior-name', '#v-senior-birthdate'].forEach(selector => {
+        q(selector).addEventListener('input', () => { q('#v-err').textContent = ''; });
     });
 }
 
@@ -168,9 +220,13 @@ function openMenuPicker(menu, onPick) {
         </div>
         <div class="modal-body">
           <div class="menu-toolbar">
-            ${cats.map((c, i) => `<button class="chip ${i === 0 ? 'active' : ''}" data-filter="${c}">${c}</button>`).join('')}
+            <input id="mp-search" class="menu-search" type="search" placeholder="Search products by name…" aria-label="Search products by name" autocomplete="off">
+            <div class="menu-category-filters">
+              ${cats.map((c, i) => `<button class="chip ${i === 0 ? 'active' : ''}" data-filter="${c}">${c}</button>`).join('')}
+            </div>
           </div>
           <div class="menu-list" id="mp-list">${menu.map(menuItemHtml).join('')}</div>
+          <p class="menu-no-results hidden" id="mp-no-results" role="status">No products match your search.</p>
         </div>
       </div></div>`;
     document.body.appendChild(wrapper);
@@ -179,12 +235,25 @@ function openMenuPicker(menu, onPick) {
     wrapper.querySelector('.modal-backdrop').addEventListener('click', e => {
         if (e.target === wrapper.querySelector('.modal-backdrop')) close();
     });
+    let activeCategory = 'All';
+    const search = wrapper.querySelector('#mp-search');
+    const filterProducts = () => {
+        const query = search.value.trim().toLowerCase();
+        let visibleCount = 0;
+        wrapper.querySelectorAll('.menu-item').forEach(el => {
+            const matchesCategory = activeCategory === 'All' || el.dataset.cat === activeCategory;
+            const matchesName = el.querySelector('.p-name').textContent.toLowerCase().includes(query);
+            const visible = matchesCategory && matchesName;
+            el.style.display = visible ? '' : 'none';
+            if (visible) visibleCount += 1;
+        });
+        wrapper.querySelector('#mp-no-results').classList.toggle('hidden', visibleCount > 0);
+    };
+    search.addEventListener('input', filterProducts);
     wrapper.querySelectorAll('[data-filter]').forEach(b => b.addEventListener('click', () => {
         wrapper.querySelectorAll('[data-filter]').forEach(x => x.classList.toggle('active', x === b));
-        const cat = b.dataset.filter;
-        wrapper.querySelectorAll('.menu-item').forEach(el => {
-            el.style.display = (cat === 'All' || el.dataset.cat === cat) ? '' : 'none';
-        });
+        activeCategory = b.dataset.filter;
+        filterProducts();
     }));
     wrapper.querySelectorAll('.chip[data-vid]').forEach(b => b.addEventListener('click', () => {
         onPick({

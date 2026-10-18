@@ -1,7 +1,8 @@
 // tools/status-check.js
 // Shared health check utility for Mango Royal frontends
 (function() {
-    const API_BASE = window.API_BASE || window.POS_API_BASE || window.KITCHEN_API_BASE || window.ADMIN_API_BASE || 'http://localhost:3000';
+    const API_BASE = window.API_BASE || window.POS_API_BASE || window.KITCHEN_API_BASE || window.ADMIN_API_BASE
+        || `${window.location.protocol}//${window.location.hostname}:3000`;
     let overlay = null;
 
     function createOverlay() {

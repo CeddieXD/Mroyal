@@ -49,17 +49,34 @@ async function ensureMetaTable() {
             payment_amount DECIMAL(10,2) NULL,
             discount_type VARCHAR(20) NULL,
             discount_amount DECIMAL(10,2) DEFAULT 0,
+            pwd_id_number VARCHAR(100) NULL,
+            senior_name VARCHAR(150) NULL,
+            senior_birthdate DATE NULL,
             void_reason VARCHAR(255) NULL,
             is_walkin TINYINT(1) DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES orders(order_id)
         )
     `);
+    const [columns] = await db.query('SHOW COLUMNS FROM pos_order_meta');
+    const existingColumns = new Set(columns.map(column => column.Field));
+    const newColumns = [
+        ['pwd_id_number', 'VARCHAR(100) NULL'],
+        ['senior_name', 'VARCHAR(150) NULL'],
+        ['senior_birthdate', 'DATE NULL'],
+    ];
+    for (const [name, definition] of newColumns) {
+        if (!existingColumns.has(name)) {
+            await db.query(`ALTER TABLE pos_order_meta ADD COLUMN ${name} ${definition}`);
+        }
+    }
 }
-ensureMetaTable().catch(err => console.error('[pos] meta table init failed:', err.message));
+const metaTableReady = ensureMetaTable();
+metaTableReady.catch(err => console.error('[pos] meta table init failed:', err.message));
 
 // Load orders + items for the given status filter
 async function loadOrders(status) {
+    await metaTableReady;
     const [orderRows] = await db.query(
         `SELECT o.order_id, o.subtotal, o.total_price, o.order_type, o.created_at, o.status,
                 m.payment_method, m.payment_amount, m.discount_type, m.discount_amount,
@@ -169,18 +186,92 @@ router.get('/menu', async (req, res) => {
 // POST /api/pos/orders/:id/verify — payment + optional PWD/Senior discount
 router.post('/orders/:id/verify', async (req, res) => {
     const orderId = Number(req.params.id);
-    const { paymentAmount, paymentMethod = 'Cash', discountType = null, discountAmount = 0 } = req.body || {};
+    const {
+        paymentAmount,
+        paymentMethod = 'Cash',
+        discountType = null,
+        discountAmount = 0,
+        pwdIdNumber = null,
+        seniorName = null,
+        seniorBirthdate = null,
+    } = req.body || {};
+    const parsedPaymentAmount = Number(paymentAmount);
+    const parsedDiscountAmount = Number(discountAmount);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+        return res.status(400).json({ error: 'Invalid order ID' });
+    }
+    if (!Number.isFinite(parsedPaymentAmount) || parsedPaymentAmount <= 0) {
+        return res.status(400).json({ error: 'A valid payment amount is required' });
+    }
+    if (!Number.isFinite(parsedDiscountAmount) || parsedDiscountAmount < 0) {
+        return res.status(400).json({ error: 'A valid discount amount is required' });
+    }
+    if (discountType && !['PWD', 'Senior'].includes(discountType)) {
+        return res.status(400).json({ error: 'Invalid discount type' });
+    }
+    const normalizedPwdId = typeof pwdIdNumber === 'string' ? pwdIdNumber.trim() : '';
+    const normalizedSeniorName = typeof seniorName === 'string' ? seniorName.trim() : '';
+    if (discountType === 'PWD' && !normalizedPwdId) {
+        return res.status(400).json({ error: 'PWD ID number is required' });
+    }
+    if (discountType === 'Senior') {
+        const dateParts = typeof seniorBirthdate === 'string'
+            ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(seniorBirthdate)
+            : null;
+        const birthdate = dateParts
+            ? new Date(Date.UTC(Number(dateParts[1]), Number(dateParts[2]) - 1, Number(dateParts[3])))
+            : null;
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const validBirthdate = Boolean(birthdate)
+            && birthdate.toISOString().slice(0, 10) === seniorBirthdate
+            && seniorBirthdate <= today;
+        if (!normalizedSeniorName || !validBirthdate) {
+            return res.status(400).json({ error: 'Senior citizen name and valid birthdate are required' });
+        }
+    }
     try {
+        await metaTableReady;
+        const [orders] = await db.query(
+            'SELECT total_price FROM orders WHERE order_id = ?',
+            [orderId]
+        );
+        if (!orders.length) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+        const orderTotal = Number(orders[0].total_price);
+        const expectedDiscount = discountType ? Math.round(orderTotal * 0.20 * 100) / 100 : 0;
+        if (Math.abs(parsedDiscountAmount - expectedDiscount) > 0.01) {
+            return res.status(400).json({ error: 'Discount amount does not match the selected discount' });
+        }
+        if (parsedPaymentAmount + 0.001 < orderTotal - expectedDiscount) {
+            return res.status(400).json({ error: 'Payment amount is less than the amount due' });
+        }
         await db.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VERIFIED, orderId]);
         await db.query(
-            `INSERT INTO pos_order_meta (order_id, payment_method, payment_amount, discount_type, discount_amount)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO pos_order_meta (
+                order_id, payment_method, payment_amount, discount_type, discount_amount,
+                pwd_id_number, senior_name, senior_birthdate
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                  payment_method = VALUES(payment_method),
                  payment_amount = VALUES(payment_amount),
                  discount_type = VALUES(discount_type),
-                 discount_amount = VALUES(discount_amount)`,
-            [orderId, paymentMethod, paymentAmount, discountType, discountAmount]
+                 discount_amount = VALUES(discount_amount),
+                 pwd_id_number = VALUES(pwd_id_number),
+                 senior_name = VALUES(senior_name),
+                 senior_birthdate = VALUES(senior_birthdate)`,
+            [
+                orderId,
+                paymentMethod,
+                parsedPaymentAmount,
+                discountType,
+                parsedDiscountAmount,
+                discountType === 'PWD' ? normalizedPwdId : null,
+                discountType === 'Senior' ? normalizedSeniorName : null,
+                discountType === 'Senior' ? seniorBirthdate : null,
+            ]
         );
         bus.emit('order:change', { orderId, status: STATUS.VERIFIED, source: 'pos' });
         res.json({ success: true });

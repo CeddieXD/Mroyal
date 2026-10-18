@@ -20,21 +20,27 @@ if a mistake was made, or a future "Served/Complete" step will retire them).
 
 ## Run
 
-1. Start the backend (adds `/api/kitchen/*` routes):
+See the repository [setup and staff sign-in guide](../README.md) for backend
+configuration, all app URLs, LAN/tablet access, and development credentials.
+Kitchen requires the `kitchen` account, and its browser session is separate
+from POS and Admin.
+
+For a standalone Kitchen run, start the backend (adds `/api/kitchen/*` routes):
 
    ```bash
    cd ../mango-royal-kiosk/mango-royal-backend
    node server.js
    ```
 
-2. Open `index.html` — any static server works. Simplest:
+2. Serve this folder with any static server. Simplest:
 
    ```bash
    npx serve .
    ```
 
-The frontend talks to `http://localhost:3000` by default. Override by setting
-`window.KITCHEN_API_BASE` before `js/app.js` loads.
+The frontend infers the backend host from the hostname used to open the app and
+uses port `3000` by default. Override with `window.KITCHEN_API_BASE` before the
+app script loads if the backend is hosted elsewhere.
 
 ## Backend endpoints (added)
 
