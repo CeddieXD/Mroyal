@@ -160,7 +160,7 @@ router.get('/menu', async (req, res) => {
             FROM products p
             JOIN product_variants pv ON pv.product_id = p.product_id
             JOIN categories c ON c.category_id = p.category_id
-            WHERE p.is_available = TRUE
+            WHERE p.is_available = TRUE AND pv.is_available = TRUE
               AND (p.bundle_quantity = 1 OR pv.size_name = 'Tall')
             ORDER BY p.product_id, pv.price
         `);

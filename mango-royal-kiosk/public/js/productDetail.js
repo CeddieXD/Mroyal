@@ -88,25 +88,29 @@ export function initProductDetail({ onAddToCart } = {}) {
         shakeStep.classList.remove('hidden');
         addonsStep.classList.add('hidden');
         const isBundle = product.bundle_quantity > 1;
+        const availableSizes = Object.keys(product.prices);
+        const singleSize = availableSizes.length === 1;
+        const selectedSize = availableSizes.includes('tall') ? 'tall' : availableSizes[0];
         headingQty.classList.toggle('hidden', !isBundle);
         headingQty.querySelector('span').textContent = isBundle ? 'BUNDLES' : 'QTY';
         sizeBtns.forEach((btn, index) => {
-            btn.classList.toggle('hidden', isBundle && index > 0);
-            btn.classList.toggle('active', index === 0);
+            const size = btn.textContent.trim().toLowerCase();
+            btn.classList.toggle('hidden', !availableSizes.includes(size));
+            btn.classList.toggle('active', size === selectedSize);
         });
         addonChoices.forEach(choice => choice.classList.toggle('hidden', isBundle));
-        productDetail.querySelector('.size-selector').classList.toggle('is-single-size', isBundle);
+        productDetail.querySelector('.size-selector').classList.toggle('is-single-size', singleSize);
         nextBtn.classList.toggle('hidden', isBundle);
         addBtn.classList.toggle('hidden', !isBundle);
         addBtn.textContent = isBundle ? 'Add Bundle to Cart' : 'Add to Cart';
-        const initialPrice = product.prices['tall'];
+        const initialPrice = product.prices[selectedSize];
         priceDisplay.setAttribute('data-base-price', initialPrice);
         addonChoices.forEach(choice => {
             choice.querySelector('[data-addon-quantity]').textContent = '0';
         });
         updateTotalPrice(1);
 
-        productDetail.querySelector('.size-selector').classList.remove('is-grande');
+        productDetail.querySelector('.size-selector').classList.toggle('is-grande', selectedSize === 'grande');
     };
 
     productDetail.querySelector('#qty-plus').onclick = () => {

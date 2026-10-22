@@ -92,6 +92,7 @@ CREATE TABLE product_variants (
     product_id INT,
     size_name ENUM('Tall','Grande') NOT NULL,
     price DECIMAL(10,2) NOT NULL,
+    is_available BOOLEAN DEFAULT TRUE,
 
     FOREIGN KEY (product_id)
     REFERENCES products(product_id)
@@ -99,20 +100,20 @@ CREATE TABLE product_variants (
 
 
 INSERT INTO product_variants VALUES
-(1,1,'Tall',90),(2,1,'Grande',105),
-(3,2,'Tall',65),(4,2,'Grande',75),
-(5,3,'Tall',65),(6,3,'Grande',75),
-(7,4,'Tall',65),(8,4,'Grande',75),
-(9,5,'Tall',150),(10,5,'Grande',90),
-(11,6,'Tall',155),(12,6,'Grande',90),
-(13,7,'Tall',145),(14,7,'Grande',90),
-(15,8,'Tall',140),(16,8,'Grande',90),
-(17,9,'Tall',95),
-(19,10,'Tall',55),(20,10,'Grande',65),
-(21,11,'Tall',55),(22,11,'Grande',65),
-(23,12,'Tall',85),(24,12,'Grande',110),
-(25,13,'Tall',160),(26,13,'Grande',185),
-(27,14,'Tall',160),(28,14,'Grande',185);
+(1,1,'Tall',90,1),(2,1,'Grande',105,1),
+(3,2,'Tall',65,1),(4,2,'Grande',75,1),
+(5,3,'Tall',65,1),(6,3,'Grande',75,1),
+(7,4,'Tall',65,1),(8,4,'Grande',75,1),
+(10,5,'Grande',90,1),
+(12,6,'Grande',90,1),
+(14,7,'Grande',90,1),
+(16,8,'Grande',90,1),
+(17,9,'Tall',95,1),
+(19,10,'Tall',55,1),(20,10,'Grande',65,1),
+(21,11,'Tall',55,1),(22,11,'Grande',65,1),
+(23,12,'Tall',85,1),(24,12,'Grande',110,1),
+(25,13,'Tall',160,1),(26,13,'Grande',185,1),
+(27,14,'Tall',160,1),(28,14,'Grande',185,1);
 
 -- =========================================
 -- TABLE: menu_addons

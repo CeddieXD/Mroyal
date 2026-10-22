@@ -315,7 +315,12 @@
     width: calc(100% - 10px);
     transform: translateX(0);
 }
+.size-selector.is-single-size .size-btn {
+    flex-basis: 100%;
+    width: 100%;
+}
 .size-selector.is-grande .selection-pill { transform: translateX(100%); }
+.size-selector.is-single-size .selection-pill { transform: translateX(0); }
 .size-btn {
     position: relative;
     flex: 1 1 50%;

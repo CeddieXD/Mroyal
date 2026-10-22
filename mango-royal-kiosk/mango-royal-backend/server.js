@@ -56,7 +56,7 @@ app.get('/api/products', async (req, res) => {
             FROM Products p
             JOIN Product_Variants pv ON p.product_id = pv.product_id
             JOIN Categories c ON p.category_id = c.category_id
-            WHERE p.is_available = TRUE
+            WHERE p.is_available = TRUE AND pv.is_available = TRUE
               AND (p.bundle_quantity = 1 OR pv.size_name = 'Tall')`;
 
         const [rows] = await db.query(sql);
@@ -148,7 +148,7 @@ app.post('/api/orders', async (req, res) => {
             `SELECT pv.variant_id, pv.price, pv.size_name, p.bundle_quantity
              FROM product_variants pv
              JOIN products p ON p.product_id = pv.product_id
-             WHERE pv.variant_id IN (?)`,
+             WHERE pv.variant_id IN (?) AND pv.is_available = TRUE`,
             [variantIds]
         );
         const variants = new Map(variantRows.map(row => [Number(row.variant_id), row]));

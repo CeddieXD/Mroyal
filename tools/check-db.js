@@ -75,6 +75,29 @@ async function verifyAndInitDB() {
       console.log('Added products.bundle_quantity column.');
     }
 
+    const [variantAvailabilityColumns] = await databaseConnection.query(
+      `SELECT COUNT(*) AS column_count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME = 'product_variants'
+         AND COLUMN_NAME = 'is_available'`,
+      [database]
+    );
+
+    if (variantAvailabilityColumns[0].column_count === 0) {
+      await databaseConnection.query(
+        'ALTER TABLE product_variants ADD COLUMN is_available BOOLEAN DEFAULT TRUE'
+      );
+      console.log('Added product_variants.is_available column.');
+    }
+
+    await databaseConnection.query(
+      `UPDATE product_variants pv
+       JOIN products p ON p.product_id = pv.product_id
+       SET pv.is_available = (pv.size_name = 'Grande')
+       WHERE p.name IN ('Mango Choco Chips', 'Mango Strawberry', 'Mango Cheesecake', 'Mango Banana')`
+    );
+
     await databaseConnection.query(
       `UPDATE products
        SET bundle_quantity = 2, description = '2 Tall cups for ₱95'
@@ -135,7 +158,7 @@ async function verifyAndInitDB() {
         `UPDATE product_variants pv
          JOIN products p ON p.product_id = pv.product_id
          SET pv.price = ?
-         WHERE p.name = ? AND pv.size_name = ?`,
+         WHERE p.name = ? AND pv.size_name = ? AND pv.is_available = TRUE`,
         [price, name, size]
       );
     }
