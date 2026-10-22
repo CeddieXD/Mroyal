@@ -10,6 +10,10 @@ const state = {
 
 const peso = n => `₱${Number(n).toFixed(2)}`;
 const $ = sel => document.querySelector(sel);
+const formatAddOns = addOns => addOns.map(addon => {
+    if (typeof addon === 'string') return addon;
+    return `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`;
+}).join(', ');
 
 /**
  * Order cards show at most two rows.
@@ -25,21 +29,21 @@ function itemRowHtml(i) {
         </div>
         <div class="item-info">
           <div class="item-name">${i.name}</div>
-          <div class="item-meta">${i.size} · ${peso(i.price)} ea</div>
+          <div class="item-meta">${i.bundleQuantity > 1 ? `${i.bundleQuantity} Tall cups/bundle · ${peso(i.price)} / bundle` : `${i.size} · ${peso(i.price)} ea`}${i.addOns?.length ? ` · Add-ons: ${formatAddOns(i.addOns)}` : ''}</div>
         </div>
-        <div class="item-price"><span class="item-qty">×${i.quantity}</span>${peso(i.price * i.quantity)}</div>
+        <div class="item-price"><span class="item-qty">${i.bundleQuantity > 1 ? `${i.quantity} bundle${i.quantity === 1 ? '' : 's'}` : `×${i.quantity}`}</span>${peso(i.price * i.quantity)}</div>
       </div>`;
 }
 function renderItemRows(items) {
     if (items.length === 1) return itemRowHtml(items[0]) + `<div class="item-row item-spacer" aria-hidden="true"></div>`;
     if (items.length === 2) return items.map(itemRowHtml).join('');
-    const remainingCount = items.slice(1).reduce((s, i) => s + i.quantity, 0);
+    const remainingCount = items.slice(1).reduce((s, i) => s + i.quantity * (i.bundleQuantity || 1), 0);
     const remainingLines = items.length - 1;
     return itemRowHtml(items[0]) + `
-      <div class="item-row item-more" title="${items.slice(1).map(i => `${i.quantity}× ${i.name} (${i.size})`).join(', ')}">
+      <div class="item-row item-more" title="${items.slice(1).map(i => i.bundleQuantity > 1 ? `${i.quantity} bundle(s) of ${i.bundleQuantity} Tall cups ${i.name}` : `${i.quantity}× ${i.name} (${i.size})${i.addOns?.length ? ` + ${formatAddOns(i.addOns)}` : ''}`).join(', ')}">
         <div class="item-thumb"><span class="placeholder">+${remainingLines}</span></div>
         <div class="item-info">
-          <div class="item-name">+${remainingCount} more items</div>
+          <div class="item-name">+${remainingCount} more cups</div>
           <div class="item-meta">${remainingLines} additional line${remainingLines > 1 ? 's' : ''} · hover to preview</div>
         </div>
       </div>`;
@@ -170,7 +174,7 @@ function handleAction(act, order) {
                 <p>Type: ${order.orderType}</p>
                 <div class="line"></div>
                 <table class="items-table">
-                    ${order.items.map(i => `<tr><td>${i.quantity}x ${i.name} (${i.size})</td><td class="right">₱${(i.price * i.quantity).toFixed(2)}</td></tr>`).join('')}
+                    ${order.items.map(i => `<tr><td>${i.bundleQuantity > 1 ? `${i.quantity} bundle(s) (${i.quantity * i.bundleQuantity} Tall cups) ${i.name}` : `${i.quantity}x ${i.name} (${i.size})`}${i.addOns?.length ? `<br><small>Add-ons: ${formatAddOns(i.addOns)}</small>` : ''}</td><td class="right">₱${(i.price * i.quantity).toFixed(2)}</td></tr>`).join('')}
                 </table>
                 <div class="line"></div>
                 <p>Order total: ₱${order.total.toFixed(2)}</p>
@@ -198,7 +202,7 @@ function handleAction(act, order) {
     if (act === 'edit') {
         ensureMenu().then(menu => openEditModal(order, menu, async items => {
             try {
-                const payload = items.map(i => ({ variantId: i.variantId, quantity: i.quantity, price: i.price }));
+                const payload = items.map(i => ({ variantId: i.variantId, quantity: i.quantity, price: i.price, addOns: i.addOns || [] }));
                 await api.edit(order.rawId, payload); closeModal(); await refresh();
             } catch (e) { alert('Edit failed: ' + e.message); }
         }));

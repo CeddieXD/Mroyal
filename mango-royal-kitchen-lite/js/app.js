@@ -8,6 +8,10 @@ const state = {
 };
 
 const $ = sel => document.querySelector(sel);
+const formatAddOns = addOns => addOns.map(addon => {
+    if (typeof addon === 'string') return addon;
+    return `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`;
+}).join(', ');
 
 // The state machine — mirrors backend TRANSITIONS.
 const NEXT = { VERIFIED: 'PREPARING', PREPARING: 'READY' };
@@ -42,9 +46,9 @@ function itemRow(i) {
         </div>
         <div class="item-info">
           <div class="item-name">${i.name}</div>
-          <div class="item-meta">${i.size || ''}</div>
+          <div class="item-meta">${i.bundleQuantity > 1 ? `${i.bundleQuantity} Tall cups per bundle` : i.size || ''}${i.addOns?.length ? ` · Add-ons: ${formatAddOns(i.addOns)}` : ''}</div>
         </div>
-        <div class="item-qty">×${i.quantity}</div>
+        <div class="item-qty">${i.bundleQuantity > 1 ? `${i.quantity} bundle${i.quantity === 1 ? '' : 's'} (${i.quantity * i.bundleQuantity} cups)` : `×${i.quantity}`}</div>
       </div>`;
 }
 

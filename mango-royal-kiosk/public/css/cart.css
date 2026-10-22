@@ -96,34 +96,6 @@
     font-size: 0.95rem;
 }
 
-.quantity-controls {
-    display: flex; align-items: center;
-    background: white;
-    border-radius: 999px;
-    padding: 4px;
-    gap: 4px;
-    box-shadow: var(--shadow-sm);
-}
-.quantity-controls button {
-    border: none;
-    background: none;
-    color: var(--mango-red);
-    font-weight: 900;
-    font-size: 1.1rem;
-    width: 28px; height: 28px;
-    min-height: 28px;
-    padding: 0;
-    border-radius: 50%;
-}
-.quantity-controls button:hover { background: var(--bg-cream); }
-.qty-number {
-    min-width: 20px;
-    text-align: center;
-    font-weight: 800;
-    color: var(--text-dark);
-    font-size: 0.95rem;
-}
-
 .cart-summary {
     padding: 18px 24px 22px;
     border-top: 2px solid var(--bg-cream);

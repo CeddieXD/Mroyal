@@ -588,6 +588,7 @@ function renderTransactions() {
                             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M13 3a9 9 0 0 0-9 9H1l4 4 4-4H6a7 7 0 1 1 2.05 4.95l-1.42 1.42A9 9 0 1 0 13 3zm-1 5v5l4.25 2.52.77-1.28-3.52-2.09V8H12z"/></svg>
                         </button></div>
                         <span>${size ? `${size} · ` : ''}${peso2(unitPrice)} each</span>
+                        ${Array.isArray(item.add_ons) && item.add_ons.length ? `<span>Add-ons: ${item.add_ons.map(addon => escapeHtml(typeof addon === 'string' ? addon : `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`)).join(', ')}</span>` : ''}
                         <ol class="item-audit-list" id="${auditId}"${auditExpanded ? '' : ' hidden'}>${itemAuditLogs.length ? itemAuditLogs.slice().reverse().map(auditEntryHtml).join('') : '<li class="item-audit-empty">No item activity recorded.</li>'}</ol>
                     </div>
                     <span class="order-item-qty">× ${quantity}</span>

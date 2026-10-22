@@ -12,6 +12,10 @@ function mount(html) {
 }
 
 const peso = n => `₱${Number(n).toFixed(2)}`;
+const formatAddOns = addOns => addOns.map(addon => {
+    if (typeof addon === 'string') return addon;
+    return `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`;
+}).join(', ');
 
 /* ---------- VERIFY ---------- */
 export function openVerifyModal(order, onConfirm) {
@@ -21,7 +25,7 @@ export function openVerifyModal(order, onConfirm) {
         <div class="modal-body">
           <div class="summary-box">
             <div class="row"><span>Order ID</span><span>${order.orderId}</span></div>
-            ${order.items.map((i, idx) => `<div class="row"><span><span class="ln">${idx + 1}.</span> ${i.quantity}× ${i.name} (${i.size})</span><span>${peso(i.price * i.quantity)}</span></div>`).join('')}
+            ${order.items.map((i, idx) => `<div class="row"><span><span class="ln">${idx + 1}.</span> ${i.bundleQuantity > 1 ? `${i.quantity} bundle(s) (${i.quantity * i.bundleQuantity} Tall cups) ${i.name}` : `${i.quantity}× ${i.name} (${i.size})`}${i.addOns?.length ? `<br><small>Add-ons: ${formatAddOns(i.addOns)}</small>` : ''}</span><span>${peso(i.price * i.quantity)}</span></div>`).join('')}
             <div class="row"><span>Order total</span><span>${peso(order.total)}</span></div>
             <div class="row" id="v-discount-row" style="display:none;color:#166534"><span id="v-discount-label">Discount (20%)</span><span id="v-discount">-₱0.00</span></div>
             <div class="row total"><span>Total to be paid</span><span id="v-total">${peso(order.total)}</span></div>
@@ -310,7 +314,7 @@ function renderItems(container, items, menu, onChange) {
               <div class="head">
                 <div>
                   <div class="name">${it.name}</div>
-                  <div class="meta">${it.size} · ₱${it.price} ea</div>
+                  <div class="meta">${product?.bundleQuantity > 1 ? `${product.bundleQuantity} Tall cups per bundle · ₱${it.price} / bundle` : `${it.size} · ₱${it.price} ea`}${it.addOns?.length ? `<br>Add-ons: ${formatAddOns(it.addOns)}` : ''}</div>
                 </div>
                 <div class="price">₱${(it.price * it.quantity).toFixed(2)}</div>
               </div>
@@ -335,7 +339,21 @@ function renderItems(container, items, menu, onChange) {
             else if (act === 'rm') items.splice(idx, 1);
             else if (act === 'size') {
                 items[idx].size = btn.dataset.size;
-                items[idx].price = Number(btn.dataset.price);
+                const addOnPrices = {
+                    'Pearls / Tapioca': 10,
+                    'Nata de Coco': 10,
+                    'Graham Crumbs / Crushed Graham': 10,
+                    'Oreo Crumbs': 10,
+                    'Choco Chips / Choco Bits': 10,
+                    Cheesecake: 20,
+                    'Frosted Cream Cheese': 25,
+                };
+                items[idx].price = Number(btn.dataset.price) +
+                    (items[idx].addOns || []).reduce((sum, addon) => {
+                        const name = typeof addon === 'string' ? addon : addon.name;
+                        const quantity = typeof addon === 'string' ? 1 : Number(addon.quantity);
+                        return sum + (addOnPrices[name] || 0) * quantity;
+                    }, 0);
                 items[idx].variantId = Number(btn.dataset.vid);
             }
             onChange();

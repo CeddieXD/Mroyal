@@ -16,10 +16,13 @@
 /* Topbar */
 .menu-topbar {
     grid-area: topbar;
+    margin: 8px 16px;
+    padding: 0 24px;
+    border: 1px solid rgba(211, 28, 28, 0.1);
+    border-radius: 20px;
     background: var(--white);
     display: flex;
     align-items: center;
-    padding: 0 30px;
     gap: 24px;
     box-shadow: var(--shadow-sm);
     z-index: 5;
@@ -54,27 +57,65 @@
     width: 20px; height: 20px; opacity: 0.5;
     pointer-events: none;
 }
-
-.order-type-pill {
+.start-again-button {
     margin-left: auto;
-    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+    padding: 10px 20px;
+    min-height: 48px;
+    border: 2px solid var(--mango-red);
+    background: white;
+    color: var(--mango-red);
+    font-size: 0.9rem;
+    font-weight: 800;
+}
+.start-again-button:hover { background: var(--mango-red); color: white; }
+
+.start-again-confirmation {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(24, 17, 10, 0.55);
+}
+.start-again-card {
+    width: min(480px, 100%);
+    padding: 32px;
+    border-radius: 24px;
+    background: white;
+    box-shadow: var(--shadow-lg);
+    text-align: center;
+}
+.start-again-card h2 {
+    margin-bottom: 10px;
+    color: var(--text-dark);
+    font-size: 1.6rem;
+}
+.start-again-card p {
+    color: var(--muted);
+    font-size: 1rem;
+}
+.start-again-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 28px;
+}
+.start-again-actions button {
+    min-height: 50px;
+    padding: 12px 18px;
+    font-size: 0.9rem;
+}
+.start-again-cancel {
+    border: 2px solid rgba(0, 0, 0, 0.1);
+    background: white;
+    color: var(--text-dark);
+}
+.start-again-confirm {
     background: var(--mango-red);
     color: white;
-    padding: 10px 20px;
-    border-radius: 999px;
-    cursor: pointer;
-    box-shadow: var(--shadow-sm);
-    transition: transform 0.15s;
-}
-.order-type-pill:active { transform: scale(0.97); }
-.ot-label { opacity: 0.75; font-size: 0.8rem; }
-.ot-value { font-weight: 800; font-size: 1rem; }
-.ot-change {
-    background: rgba(255,255,255,0.2);
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 700;
 }
 
 /* Category rail */
@@ -119,10 +160,24 @@
     grid-area: products;
     overflow-y: auto;
     padding: 24px;
+    /* scroll-behavior is intentionally omitted — all scrolling is driven by
+       JS scrollTo({ behavior }) so the CSS property is redundant and can
+       cause double-animation stutter on some WebKit/Chromium versions. */
+    scroll-padding-top: 16px;
 }
 .product-section::-webkit-scrollbar { width: 8px; }
 .product-section::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 4px; }
 
+.menu-category-section {
+    margin-bottom: 46px;
+}
+.menu-category-title {
+    margin-bottom: 18px;
+    color: var(--mango-red);
+    font-size: 1.4rem;
+    font-weight: 900;
+    scroll-margin-top: 24px;
+}
 .product-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -134,6 +189,9 @@
 .aspect-16-10 .product-grid {
     grid-template-columns: repeat(3, 1fr);
     row-gap: 100px;
+}
+.menu-category-section .product-grid {
+    padding-top: 70px;
 }
 .aspect-16-10 .menu-layout {
     grid-template-columns: 220px 1fr 360px;

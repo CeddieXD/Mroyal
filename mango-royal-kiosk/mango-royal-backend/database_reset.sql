@@ -52,6 +52,8 @@ CREATE TABLE products (
     category_id INT,
     name VARCHAR(100) NOT NULL,
     description TEXT,
+    ingredients TEXT,
+    bundle_quantity INT NOT NULL DEFAULT 1,
     image_url VARCHAR(255),
     is_available BOOLEAN DEFAULT TRUE,
 
@@ -60,21 +62,23 @@ CREATE TABLE products (
 );
 
 
-INSERT INTO products VALUES
-(1,1,'Mango Royal','Signature mango milkshake','MangoRoyal.png',1),
-(2,1,'Mango Graham','Mango with graham and cream','MangoGraham.png',1),
-(3,1,'Mango Oreo','Mango with Oreo bits','MangoOreo.png',1),
-(4,1,'Mango Mixed','Premium mango mix','MangoMix.png',1),
-(5,2,'Mango Cheesecake','Cheesecake mango blend','MangoCheesecake.png',1),
-(6,2,'Mango Strawberry','Strawberry mango blend','MangoStrawberry.png',1),
-(7,2,'Mango Banana','Banana mango blend','MangoBanana.png',1),
-(8,2,'Mango Choco Chips','Chocolate chip mango','MangoChocoChips.png',1),
-(9,2,'Mango Doble','Double mango portion','MangoDoble.png',1),
-(10,3,'Mango Plain','Pure mango drink','MangoPlain.png',1),
-(11,3,'Fresh Juice','Fresh mango juice','FreshJuice.png',1),
-(12,3,'Naked Mango','No sugar added mango','NakedMango.png',1),
-(13,4,'Mango Ube Felize','Mango + Ube fusion','MangoUbeFelize.png',1),
-(14,4,'Mango Ube Karol','Seasonal mango + ube','MangoUbeKarol.png',1);
+INSERT INTO products
+    (product_id, category_id, name, description, ingredients, bundle_quantity, image_url, is_available)
+VALUES
+(1,1,'Mango Royal','Signature mango milkshake','Fresh ripe mango, whole milk, condensed milk, crushed ice, tapioca pearls',1,'MangoRoyal.png',1),
+(2,1,'Mango Graham','Mango with graham and cream','Fresh ripe mango, whole milk, condensed milk, all-purpose cream, crushed graham crackers, crushed ice',1,'MangoGraham.png',1),
+(3,1,'Mango Oreo','Mango with Oreo bits','Fresh ripe mango, whole milk, condensed milk, Oreo cookie crumbs, crushed ice',1,'MangoOreo.png',1),
+(4,1,'Mango Mixed','Premium mango mix','Fresh ripe mango, banana, strawberry, whole milk, condensed milk, crushed ice',1,'MangoMix.png',1),
+(5,2,'Mango Cheesecake','Cheesecake mango blend','Fresh ripe mango, cream cheese, cheesecake crumbs, whole milk, condensed milk, crushed ice',1,'MangoCheesecake.png',1),
+(6,2,'Mango Strawberry','Strawberry mango blend','Fresh ripe mango, strawberry puree, whole milk, condensed milk, crushed ice',1,'MangoStrawberry.png',1),
+(7,2,'Mango Banana','Banana mango blend','Fresh ripe mango, banana, whole milk, condensed milk, crushed ice',1,'MangoBanana.png',1),
+(8,2,'Mango Choco Chips','Chocolate chip mango','Fresh ripe mango, whole milk, condensed milk, chocolate chips, crushed ice',1,'MangoChocoChips.png',1),
+(9,2,'Mango Doble','2 Tall cups for ₱95','Double portion of fresh ripe mango, whole milk, condensed milk, crushed ice',2,'MangoDoble.png',1),
+(10,3,'Mango Plain','Pure mango drink','Fresh ripe mango, whole milk, crushed ice',1,'MangoPlain.png',1),
+(11,3,'Fresh Juice','Fresh mango juice','Fresh ripe mango, filtered water, crushed ice; no added sugar',1,'FreshJuice.png',1),
+(12,3,'Naked Mango','No sugar added mango','Fresh ripe mango, unsweetened milk, crushed ice; no added sugar',1,'NakedMango.png',1),
+(13,4,'Mango Ube Felize','Mango + Ube fusion','Fresh ripe mango, ube puree, whole milk, condensed milk, crushed ice',1,'MangoUbeFelize.png',1),
+(14,4,'Mango Ube Karol','Seasonal mango + ube','Fresh ripe mango, ube halaya, whole milk, condensed milk, crushed ice',1,'MangoUbeKarol.png',1);
 
 
 -- =========================================
@@ -95,20 +99,42 @@ CREATE TABLE product_variants (
 
 
 INSERT INTO product_variants VALUES
-(1,1,'Tall',120),(2,1,'Grande',145),
-(3,2,'Tall',125),(4,2,'Grande',150),
-(5,3,'Tall',130),(6,3,'Grande',155),
-(7,4,'Tall',135),(8,4,'Grande',160),
-(9,5,'Tall',150),(10,5,'Grande',175),
-(11,6,'Tall',155),(12,6,'Grande',180),
-(13,7,'Tall',145),(14,7,'Grande',170),
-(15,8,'Tall',140),(16,8,'Grande',165),
-(17,9,'Tall',170),(18,9,'Grande',195),
-(19,10,'Tall',90),(20,10,'Grande',115),
-(21,11,'Tall',80),(22,11,'Grande',105),
+(1,1,'Tall',90),(2,1,'Grande',105),
+(3,2,'Tall',65),(4,2,'Grande',75),
+(5,3,'Tall',65),(6,3,'Grande',75),
+(7,4,'Tall',65),(8,4,'Grande',75),
+(9,5,'Tall',150),(10,5,'Grande',90),
+(11,6,'Tall',155),(12,6,'Grande',90),
+(13,7,'Tall',145),(14,7,'Grande',90),
+(15,8,'Tall',140),(16,8,'Grande',90),
+(17,9,'Tall',95),
+(19,10,'Tall',55),(20,10,'Grande',65),
+(21,11,'Tall',55),(22,11,'Grande',65),
 (23,12,'Tall',85),(24,12,'Grande',110),
 (25,13,'Tall',160),(26,13,'Grande',185),
 (27,14,'Tall',160),(28,14,'Grande',185);
+
+-- =========================================
+-- TABLE: menu_addons
+-- =========================================
+
+DROP TABLE IF EXISTS menu_addons;
+
+CREATE TABLE menu_addons (
+    addon_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    price DECIMAL(10,2) NOT NULL,
+    is_available BOOLEAN DEFAULT TRUE
+);
+
+INSERT INTO menu_addons (name, price) VALUES
+('Pearls / Tapioca', 10),
+('Nata de Coco', 10),
+('Graham Crumbs / Crushed Graham', 10),
+('Oreo Crumbs', 10),
+('Choco Chips / Choco Bits', 17),
+('Cheesecake', 22),
+('Frosted Cream Cheese', 27);
 
 
 -- =========================================
@@ -147,6 +173,7 @@ CREATE TABLE order_items (
     variant_id INT,
     quantity INT NOT NULL,
     price_at_purchase DECIMAL(10,2) NOT NULL,
+    add_ons JSON NULL,
 
     FOREIGN KEY (order_id)
     REFERENCES orders(order_id),

@@ -6,6 +6,7 @@ const bus = require('./events');
 const {
     ensureAuditTable,
     loadOrderItemSnapshots,
+    normalizeAddOns,
     writeItemAuditLogs,
     writeOrderStatusAudit,
 } = require('../audit-logs');
@@ -97,8 +98,8 @@ async function loadOrders(status) {
 
     const ids = orderRows.map(o => o.order_id);
     const [itemRows] = await db.query(
-        `SELECT oi.order_item_id, oi.order_id, oi.variant_id, oi.quantity, oi.price_at_purchase,
-                pv.size_name, p.product_id, p.name, p.image_url
+        `SELECT oi.order_item_id, oi.order_id, oi.variant_id, oi.quantity, oi.price_at_purchase, oi.add_ons,
+                pv.size_name, p.product_id, p.name, p.image_url, p.bundle_quantity
          FROM order_items oi
          JOIN product_variants pv ON pv.variant_id = oi.variant_id
          JOIN products p ON p.product_id = pv.product_id
@@ -131,6 +132,8 @@ async function loadOrders(status) {
                 size: i.size_name,
                 price: Number(i.price_at_purchase),
                 quantity: i.quantity,
+                bundleQuantity: Number(i.bundle_quantity) || 1,
+                addOns: normalizeAddOns(i.add_ons),
             })),
     }));
 }
@@ -152,12 +155,13 @@ router.get('/orders', async (req, res) => {
 router.get('/menu', async (req, res) => {
     try {
         const [rows] = await db.query(`
-            SELECT p.product_id, p.name, p.description, p.image_url, c.category_name,
+            SELECT p.product_id, p.name, p.description, p.image_url, p.bundle_quantity, c.category_name,
                    pv.variant_id, pv.size_name, pv.price
             FROM products p
             JOIN product_variants pv ON pv.product_id = p.product_id
             JOIN categories c ON c.category_id = p.category_id
             WHERE p.is_available = TRUE
+              AND (p.bundle_quantity = 1 OR pv.size_name = 'Tall')
             ORDER BY p.product_id, pv.price
         `);
         // Group by product
@@ -168,6 +172,7 @@ router.get('/menu', async (req, res) => {
                     id: r.product_id,
                     name: r.name,
                     description: r.description,
+                    bundleQuantity: Number(r.bundle_quantity) || 1,
                     image: imageUrl(r.image_url),
                     category: r.category_name,
                     sizes: [],
@@ -457,9 +462,15 @@ router.patch('/orders/:id', async (req, res) => {
             }
 
             await connection.query(`DELETE FROM order_items WHERE order_id = ?`, [orderId]);
-            const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
+            const values = items.map(i => [
+                orderId,
+                i.variantId,
+                i.quantity,
+                i.price,
+                JSON.stringify(Array.isArray(i.addOns) ? i.addOns : []),
+            ]);
             await connection.query(
-                `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
+                `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase, add_ons) VALUES ?`,
                 [values]
             );
             await connection.query(

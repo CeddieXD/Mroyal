@@ -10,19 +10,15 @@
             <img src="assets/icons/search-icon.png" class="search-icon" alt="">
             <input type="text" id="menu-search" placeholder="Search shakes...">
         </div>
+        <button class="start-again-button" id="start-again-button" type="button">Start Again</button>
 
-        <div class="order-type-pill" id="order-type-pill">
-            <span class="ot-label">Order Type</span>
-            <span class="ot-value" id="ot-value">Dine In</span>
-            <span class="ot-change">Change</span>
-        </div>
     </header>
 
     <aside class="category-rail">
         <h3>Menu</h3>
-        <div class="cat-item active" data-category="BEST_SELLERS">
-            <span class="cat-emoji">⭐</span>
-            <span>Best Sellers</span>
+        <div class="cat-item active" data-category="SEASONAL">
+            <span class="cat-emoji">✨</span>
+            <span>Limited Offers</span>
         </div>
         <div class="cat-item" data-category="PREMIUM">
             <span class="cat-emoji">💎</span>
@@ -32,14 +28,25 @@
             <span class="cat-emoji">🥭</span>
             <span>Basics</span>
         </div>
-        <div class="cat-item" data-category="SEASONAL">
-            <span class="cat-emoji">✨</span>
-            <span>Seasonal</span>
+        <div class="cat-item" data-category="BEST_SELLERS">
+            <span class="cat-emoji">⭐</span>
+            <span>Best Sellers</span>
         </div>
     </aside>
 
+    <div class="start-again-confirmation hidden" id="start-again-confirmation" role="dialog" aria-modal="true" aria-labelledby="start-again-title">
+        <div class="start-again-card">
+            <h2 id="start-again-title">Start a new order?</h2>
+            <p>Your current cup and order will be cleared.</p>
+            <div class="start-again-actions">
+                <button class="start-again-cancel" id="start-again-cancel" type="button">Keep Ordering</button>
+                <button class="start-again-confirm" id="start-again-confirm" type="button">Yes, Start Again</button>
+            </div>
+        </div>
+    </div>
+
     <section class="product-section">
-        <div class="product-grid"></div>
+        <div class="product-categories"></div>
     </section>
 
     <aside class="cart-sidebar" id="cart-sidebar">
@@ -50,8 +57,8 @@
 
         <div class="cart-items-list" id="cart-items-list">
             <div class="cart-empty">
-                <div class="cart-empty-icon">🥭</div>
-                <p>Your cart is empty</p>
+                <div class="cart-empty-icon" aria-hidden="true">🥤</div>
+                <p>Your cup is empty</p>
                 <small>Tap a shake to add it here</small>
             </div>
         </div>

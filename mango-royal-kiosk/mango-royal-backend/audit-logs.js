@@ -1,5 +1,22 @@
 const db = require('./config/db');
 
+function normalizeAddOns(value) {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (parsed == null) return [];
+    if (!Array.isArray(parsed)) throw new Error('Stored add-ons must be a JSON array.');
+    return parsed.map(addon => {
+        if (typeof addon === 'string') return { name: addon, quantity: 1 };
+        if (!addon || typeof addon.name !== 'string') {
+            throw new Error('Stored add-on entry is invalid.');
+        }
+        const quantity = addon.quantity === undefined ? 1 : Number(addon.quantity);
+        if (!Number.isInteger(quantity) || quantity < 1) {
+            throw new Error('Stored add-on quantity is invalid.');
+        }
+        return { name: addon.name, quantity };
+    });
+}
+
 let auditTableReady;
 
 function ensureAuditTable() {
@@ -83,7 +100,7 @@ async function writeItemAuditLogs(executor, entries) {
 
 async function loadOrderItemSnapshots(executor, orderId) {
     const [rows] = await executor.query(`
-        SELECT oi.order_item_id, oi.variant_id, oi.quantity, oi.price_at_purchase,
+        SELECT oi.order_item_id, oi.variant_id, oi.quantity, oi.price_at_purchase, oi.add_ons,
                pv.size_name, p.name AS product_name
         FROM order_items oi
         JOIN product_variants pv ON pv.variant_id = oi.variant_id
@@ -112,6 +129,7 @@ async function writeOrderStatusAudit(executor, {
 }
 
 module.exports = {
+    normalizeAddOns,
     ensureAuditTable,
     loadOrderItemSnapshots,
     writeItemAuditLogs,

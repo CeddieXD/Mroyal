@@ -3,7 +3,6 @@ import { loadComponent } from './loader.js';
 import { preloadIntroFrames } from './utils.js';
 import { initSplash, showSplash } from './splash.js';
 import { playIntro } from './intro.js';
-import { initOrderType } from './orderType.js';
 import { initMainMenu } from './mainMenu.js';
 import { initProductDetail } from './productDetail.js';
 import { initCart } from './cart.js';
@@ -12,12 +11,12 @@ import { initPayment } from './payment.js';
 import { initQueue } from './queue.js';
 
 const API_BASE = window.API_BASE || window.location.origin;
-const IDLE_TIMEOUT_MS = 15 * 1000;   // 15s of inactivity resets the kiosk
+const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 const IDLE_WARNING_SECONDS = 10;
 const INTRO_INTERVAL_MS = 8 * 1000;  // On splash, play intro every 8s
 
 const screenIds = [
-    'splash-screen', 'intro', 'order-type', 'main-menu',
+    'splash-screen', 'intro', 'main-menu',
     'product-detail', 'review-screen', 'payment-screen', 'queue-screen', 'idle-timeout-modal'
 ];
 
@@ -62,7 +61,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     await Promise.all([
         loadComponent('splash-screen', 'components/splash.html'),
         loadComponent('intro', 'components/intro.html'),
-        loadComponent('order-type', 'components/orderType.html'),
         loadComponent('main-menu', 'components/mainMenu.html'),
         loadComponent('product-detail', 'components/productDetail.html'),
         loadComponent('review-screen', 'components/review.html'),
@@ -71,7 +69,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     ]);
 
     // ---- Session state ----
-    let orderType = 'Dine-in';
     let sessionId = null;
     let attractIntroTimer = null;
     let idleTimer = null;
@@ -96,17 +93,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (scheduleIntro) scheduleAttractIntro();
     };
 
-    const goOrderType = () => {
-        clearAttractLoop();
-        hideAll();
-        orderTypeScreen.show();
-        startIdleTimer();
-    };
-
     const goMenu = async () => {
         clearAttractLoop();
         hideAll();
-        menu.setOrderType(orderType === 'Dine-in' ? 'Dine In' : 'Take Out');
         menu.show();
         startIdleTimer();
         if (!sessionId) {
@@ -120,7 +109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const goReview = () => {
         hideAll();
-        review.show({ items: cart.getSnapshot(), orderType: orderType === 'Dine-in' ? 'Dine In' : 'Take Out' });
+        review.show({ items: cart.getSnapshot(), orderType: 'Take Out' });
         startIdleTimer();
     };
 
@@ -199,7 +188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearIdleTimer();
         idleTimer = setTimeout(showIdleWarning, IDLE_TIMEOUT_MS);
     };
-    ['click', 'pointerdown', 'touchstart', 'keydown'].forEach(evt => {
+    ['click', 'pointerdown', 'pointermove', 'mousemove', 'touchstart', 'keydown'].forEach(evt => {
         document.addEventListener(evt, () => {
             if (idleWarningActive) {
                 resumeFromIdleWarning();
@@ -212,16 +201,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ---- Order submission ----
     const submitOrder = async () => {
         const items = cart.getSnapshot();
-        const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
         const payload = {
             session_id: sessionId,
-            subtotal,
-            total_price: subtotal,
-            order_type: orderType,
+            order_type: 'Take-out',
             items: items.map(i => ({
                 variant_id: i.variant_id,
                 quantity: i.quantity,
-                price: i.price,
+                price: i.basePrice,
+                add_ons: i.addOns.map(({ name, quantity }) => ({ name, quantity })),
             })),
         };
         try {
@@ -251,12 +238,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     // ---- Wire components ----
-    initSplash(() => goOrderType());
-
-    const orderTypeScreen = initOrderType({
-        onChoose: (type) => { orderType = type; goMenu(); },
-        onBack: () => goAttract(),
-    });
+    initSplash(() => goMenu());
 
     const detail = initProductDetail({
         onAddToCart: (item) => cart.addItem(item),
@@ -264,7 +246,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const menu = initMainMenu({
         onProductClick: (imgEl, product) => detail.morphForward(imgEl, product),
-        onChangeOrderType: () => goOrderType(),
+        onStartAgain: () => goAttract(),
     });
 
     const cart = initCart({
@@ -274,6 +256,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const review = initReview({
         onBack: () => goMenu(),
         onProceed: () => goPayment(),
+        onEditItem: (item, index) => {
+            const product = menu.getProduct(item.product_id);
+            if (!product) {
+                console.error(`Cannot edit cart item: product ${item.product_id} is not available in the menu.`);
+                alert('Sorry, this item could not be loaded for editing. Please see the counter.');
+                return;
+            }
+            hideAll();
+            detail.editItem(product, item, index, {
+                onSave: (updatedItem, itemIndex) => {
+                    cart.updateItem(itemIndex, updatedItem);
+                    goReview();
+                },
+                onCancel: goReview,
+            });
+        },
     });
 
     const payment = initPayment({
@@ -284,6 +282,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const queue = initQueue({
         onDone: () => goAttract({ scheduleIntro: false }),
     });
+
+    const bulkOrderModal = document.getElementById('bulk-order-modal');
+    document.getElementById('bulk-order-dismiss').onclick = () => bulkOrderModal.classList.add('hidden');
+    const showBulkOrderPrompt = () => bulkOrderModal.classList.remove('hidden');
+    detail.setBulkOrderPrompt(showBulkOrderPrompt);
+    cart.setBulkOrderPrompt(showBulkOrderPrompt);
 
     // ---- Start ----
     goAttract();

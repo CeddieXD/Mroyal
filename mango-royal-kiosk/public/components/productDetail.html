@@ -1,7 +1,7 @@
 <div class="detail-content">
     <div class="detail-header">
         <button class="close-detail">‹ Back</button>
-        <div class="detail-title">Customize</div>
+        <div class="detail-title" id="detail-step-title">Customize Your Shake</div>
         <span class="detail-spacer"></span>
     </div>
 
@@ -14,36 +14,73 @@
         </div>
 
         <div class="detail-right">
-            <h2 id="detail-name">Mango Royal</h2>
-
-            <div class="detail-options">
-                <p class="option-label">Shake Size</p>
-                <div class="size-selector">
-                    <div class="selection-pill"></div>
-                    <button class="size-btn active">Tall</button>
-                    <button class="size-btn">Grande</button>
-                </div>
-
-                <div class="qty-rating-row">
-                    <div class="qty-selector">
-                        <span>Qty</span>
-                        <div class="qty-controls">
-                            <button id="qty-minus">−</button>
-                            <span id="qty-val">1</span>
-                            <button id="qty-plus">+</button>
-                        </div>
+            <div class="detail-product-heading">
+                <h2 id="detail-name">Mango Royal</h2>
+                <div class="qty-selector detail-heading-qty hidden">
+                    <span>QTY</span>
+                    <div class="qty-controls">
+                        <button id="qty-minus" type="button" aria-label="Decrease shake quantity">−</button>
+                        <span id="qty-val">1</span>
+                        <button id="qty-plus" type="button" aria-label="Increase shake quantity">+</button>
                     </div>
                 </div>
+            </div>
 
-                <div class="description">
-                    <p class="option-label">Description</p>
-                    <p id="detail-desc">Our signature mango royal milkshake is made from the freshest Philippine mangoes, blended to perfection with premium milk and topped with chewy pearls.</p>
-                </div>
+            <div class="detail-options">
+                <section class="customize-step" id="shake-step">
+                    <p class="option-label">Shake Size</p>
+                    <div class="size-selector">
+                        <div class="selection-pill"></div>
+                        <button class="size-btn active" type="button">Tall</button>
+                        <button class="size-btn" type="button">Grande</button>
+                    </div>
+
+                    <div class="description">
+                        <p class="option-label">Description</p>
+                        <p id="detail-desc"></p>
+                    </div>
+                </section>
+
+                <section class="customize-step hidden" id="addons-step">
+                    <button class="addon-back-button" id="addons-back" type="button">‹ Back to shake</button>
+                    <fieldset class="addon-options">
+                        <legend class="option-label">Choose up to 10 toppings total</legend>
+                        <div class="addon-choice" data-addon-name="Pearls / Tapioca" data-price="10">
+                            <span>Pearls / Tapioca</span><strong>₱10</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Pearls / Tapioca">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Pearls / Tapioca">+</button></div>
+                        </div>
+                        <div class="addon-choice" data-addon-name="Nata de Coco" data-price="10">
+                            <span>Nata de Coco</span><strong>₱10</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Nata de Coco">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Nata de Coco">+</button></div>
+                        </div>
+                        <div class="addon-choice" data-addon-name="Graham Crumbs / Crushed Graham" data-price="10">
+                            <span>Graham Crumbs / Crushed Graham</span><strong>₱10</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Graham Crumbs">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Graham Crumbs">+</button></div>
+                        </div>
+                        <div class="addon-choice" data-addon-name="Oreo Crumbs" data-price="10">
+                            <span>Oreo Crumbs</span><strong>₱10</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Oreo Crumbs">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Oreo Crumbs">+</button></div>
+                        </div>
+                        <div class="addon-choice" data-addon-name="Choco Chips / Choco Bits" data-price="17">
+                            <span>Choco Chips / Choco Bits</span><strong>₱17</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Choco Chips">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Choco Chips">+</button></div>
+                        </div>
+                        <div class="addon-choice" data-addon-name="Cheesecake" data-price="22">
+                            <span>Cheesecake</span><strong>₱22</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Cheesecake">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Cheesecake">+</button></div>
+                        </div>
+                        <div class="addon-choice" data-addon-name="Frosted Cream Cheese" data-price="27">
+                            <span>Frosted Cream Cheese</span><strong>₱27</strong>
+                            <div class="addon-quantity-controls"><button type="button" data-addon-delta="-1" aria-label="Remove Frosted Cream Cheese">−</button><span data-addon-quantity>0</span><button type="button" data-addon-delta="1" aria-label="Add Frosted Cream Cheese">+</button></div>
+                        </div>
+                    </fieldset>
+                </section>
             </div>
 
             <div class="detail-footer">
                 <div class="detail-price" data-base-price="0">₱0.00</div>
-                <button class="add-to-cart-big">Add to Cart</button>
+                <button class="next-to-addons-big" id="next-to-addons" type="button">Next →</button>
+                <button class="add-to-cart-big hidden" id="add-to-cart" type="button">Add to Cart</button>
             </div>
         </div>
     </div>

@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const db = require('../config/db');
-const { ensureAuditTable } = require('../audit-logs');
+const { ensureAuditTable, normalizeAddOns } = require('../audit-logs');
 const {
     SettingsValidationError,
     normalizeAdminSettings,
@@ -264,7 +264,7 @@ router.get('/transactions', async (req, res) => {
         const ids = orders.map(o => o.order_id);
         const [itemRows] = await db.query(`
             SELECT oi.order_item_id, oi.order_id, oi.variant_id, oi.quantity,
-                   oi.price_at_purchase, pv.size_name, p.name, p.image_url
+                   oi.price_at_purchase, oi.add_ons, pv.size_name, p.name, p.image_url
             FROM order_items oi
             JOIN product_variants pv ON pv.variant_id = oi.variant_id
             JOIN products p ON p.product_id = pv.product_id
@@ -283,7 +283,11 @@ router.get('/transactions', async (req, res) => {
         const list = orders.map(o => {
             const items = itemRows.filter(i => i.order_id === o.order_id);
             const auditLogs = auditRows.filter(log => log.order_id === o.order_id);
-            const itemStrings = items.map(i => `${i.name} (${i.size_name}) x${i.quantity}`);
+            const itemStrings = items.map(i => {
+                const addOns = normalizeAddOns(i.add_ons);
+                const addonNames = addOns.map(addon => `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`);
+                return `${i.name} (${i.size_name})${addonNames.length ? ` + ${addonNames.join(', ')}` : ''} x${i.quantity}`;
+            });
             return {
                 id: queueNumber(o.order_id),
                 rawId: o.order_id,
@@ -292,6 +296,7 @@ router.get('/transactions', async (req, res) => {
                 items: itemStrings.length ? itemStrings : ['No items recorded'],
                 itemDetails: items.map(item => ({
                     ...item,
+                    add_ons: normalizeAddOns(item.add_ons),
                     auditLogs: auditLogs.filter(log => log.variant_id === item.variant_id),
                 })),
                 auditLogs,
