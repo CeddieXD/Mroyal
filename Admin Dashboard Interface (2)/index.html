@@ -131,6 +131,7 @@
                         <div class="ops-head">
                             <div>
                                 <h3>Today's Operations</h3>
+                                <p>Order health and completion</p>
                             </div>
                             <span class="today-pill">Today</span>
                         </div>
@@ -156,7 +157,6 @@
                                 <small>orders cancelled</small>
                             </div>
                         </div>
-
                     </div>
                 </div>
             </div>
@@ -231,7 +231,7 @@
                 </div>
                 <div class="menu-page-actions">
                     <button class="menu-archive-toggle" id="menu-archive-toggle" type="button" aria-pressed="false" aria-label="View archived menu items">
-                        <span class="menu-archive-icon" aria-hidden="true">A</span>
+                        <span class="menu-archive-icon" aria-hidden="true"><span class="archive-icon-shape"></span></span>
                         <span class="menu-archive-text">Archived</span>
                         <span class="menu-archive-badge" id="menu-archive-badge">0</span>
                     </button>
@@ -260,7 +260,7 @@
                             <option value="year">This Year</option>
                         </select>
                     </div>
-                    <button class="btn btn-ghost" id="eod-report-btn">📄 End-of-Day (Z-Reading)</button>
+                    <button class="btn btn-ghost" id="eod-report-btn">📄 Preview End-of-Day (Z-Reading)</button>
                     <button class="btn btn-primary" id="export-rep-btn">⬇ Export Report</button>
                 </div>
             </div>
@@ -268,7 +268,7 @@
                 <h3>Basic Sales Report</h3>
                 <div class="report-basic">
                     <div class="rep-tile orange"><p>Total Sales</p><p class="big" id="rep-total-sales">₱0</p><p class="sub">Current revenue</p></div>
-                    <div class="rep-tile blue"><p>Transactions</p><p class="big" id="rep-total-tx">0</p><p class="sub">Completed orders</p></div>
+                    <div class="rep-tile blue"><p>Transactions</p><p class="big" id="rep-total-tx">0</p><p class="sub">Non-voided orders</p></div>
                     <div class="rep-tile green"><p>Avg Order Value</p><p class="big" id="rep-avg-val">₱0</p><p class="sub">Per transaction</p></div>
                 </div>
             </div>
@@ -286,26 +286,22 @@
             </div>
             <div class="card" id="report-payment-methods">
                 <h3>Payment Methods</h3>
-                <p class="section-sub">Today's transactions by payment type</p>
+                <p class="section-sub" id="rep-payment-subtitle">Selected interval transactions by payment type</p>
                 <table class="table" id="rep-payment-table">
                     <thead><tr><th>Payment method</th><th>Transactions</th><th>Sales</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
             <div class="card" id="report-hourly-trend">
-                <h3>Time Based Sales</h3>
-                <p class="section-sub">Sales by Hour</p>
+                <h3>Sales Trend</h3>
+                <p class="section-sub" id="rep-trend-subtitle">Sales trend for the selected interval</p>
                 <div class="chart-wrap tall"><canvas id="chart-hour"></canvas></div>
-                <div id="rep-day-wrap" hidden>
-                    <p class="section-sub">Sales by Day (This Week)</p>
-                    <div class="chart-wrap tall"><canvas id="chart-day"></canvas></div>
-                </div>
             </div>
             <div class="card insights">
                 <h3>📈 Key Insights &amp; Recommendations</h3>
                 <div class="insights-grid" id="insights-container">
                     <div class="insight"><div class="ins-ico green">↗</div><div><b>Sales Performance</b><p id="ins-sales">Tracking active orders and revenue.</p><span class="tag green" id="ins-sales-tag">Live Tracking</span></div></div>
-                    <div class="insight"><div class="ins-ico orange">⏱</div><div><b>Peak Hours</b><p id="ins-peak">Analyzing hourly transaction trends.</p><span class="tag orange" id="ins-peak-tag">Hourly Analysis</span></div></div>
+                    <div class="insight"><div class="ins-ico orange">⏱</div><div><b>Peak Period</b><p id="ins-peak">Analyzing sales period trends.</p><span class="tag orange" id="ins-peak-tag">Period Analysis</span></div></div>
                     <div class="insight"><div class="ins-ico purple">🍽</div><div><b>Top Product</b><p id="ins-top">Calculating customer favorite products.</p><span class="tag purple" id="ins-top-tag">Top Performer</span></div></div>
                     <div class="insight"><div class="ins-ico blue">👥</div><div><b>Staffing & Operations</b><p id="ins-staff">Ensuring smooth workflow from POS to Kitchen.</p><span class="tag blue" id="ins-staff-tag">Operations</span></div></div>
                 </div>
@@ -340,7 +336,7 @@
                 </div>
                 <div class="menu-page-actions">
                     <button class="menu-archive-toggle" id="user-archive-toggle" type="button" aria-pressed="false" aria-label="View archived users">
-                        <span class="menu-archive-icon" aria-hidden="true">A</span>
+                        <span class="menu-archive-icon" aria-hidden="true"><span class="archive-icon-shape"></span></span>
                         <span class="menu-archive-text">Archived</span>
                         <span class="menu-archive-badge" id="user-archive-badge">0</span>
                     </button>
@@ -369,7 +365,7 @@
                 <h3>📄 Report Settings</h3>
                 <div class="form-grid">
                     <label>Report Frequency<select id="setting-report-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option></select></label>
-                    <label>Default Format<select id="setting-report-format"><option value="pdf">PDF (Print)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+                    <label>Default Format<select id="setting-report-format"><option value="pdf">PDF (Preview)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
                     <label class="span2">Recipients (Email)<input id="setting-report-recipients" type="text" autocomplete="email" placeholder="manager@mangoroyal.com"><small>Separate multiple emails with commas. Saved for future email integration.</small></label>
                 </div>
                 <p class="settings-unavailable-note">Report frequency and recipients are saved preferences; scheduled email delivery is not configured. Export reports manually from the Reports page.</p>
@@ -377,7 +373,7 @@
                     <div class="toggle-row"><div><b>Sales Summary</b><small>Total sales and transactions</small></div><label class="switch"><input type="checkbox" data-report-section="salesSummary"><span></span></label></div>
                     <div class="toggle-row"><div><b>Product Performance</b><small>Best and least selling items</small></div><label class="switch"><input type="checkbox" data-report-section="productPerformance"><span></span></label></div>
                     <div class="toggle-row"><div><b>Payment Methods</b><small>Breakdown by payment type</small></div><label class="switch"><input type="checkbox" data-report-section="paymentMethods"><span></span></label></div>
-                    <div class="toggle-row"><div><b>Hourly Sales Trend</b><small>Sales by hour analysis</small></div><label class="switch"><input type="checkbox" data-report-section="hourlySalesTrend"><span></span></label></div>
+                    <div class="toggle-row"><div><b>Sales Trend</b><small>Sales by hour, day, or month for the selected interval</small></div><label class="switch"><input type="checkbox" data-report-section="hourlySalesTrend"><span></span></label></div>
                 </div>
             </div>
             <div class="card">
@@ -387,6 +383,12 @@
                     <div class="toggle-row settings-unavailable"><div><b>Email Notifications</b><small>Requires an email delivery service</small></div><label class="switch"><input type="checkbox" disabled aria-label="Email notifications unavailable"><span></span></label></div>
                     <div class="toggle-row settings-unavailable"><div><b>Low Stock Alerts</b><small>Requires inventory quantities and alert thresholds</small></div><label class="switch"><input type="checkbox" disabled aria-label="Low stock alerts unavailable"><span></span></label></div>
                     <div class="toggle-row settings-unavailable"><div><b>Daily Reports</b><small>Requires a report scheduler and email delivery</small></div><label class="switch"><input type="checkbox" disabled aria-label="Daily reports unavailable"><span></span></label></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>🧾 POS Features</h3>
+                <div class="toggle-list">
+                    <div class="toggle-row"><div><b>End-of-Day Receipt</b><small>Show the End-of-Day Receipt print button in the POS toolbar</small></div><label class="switch"><input type="checkbox" id="setting-eod-receipt"><span></span></label></div>
                 </div>
             </div>
             <div class="card">
@@ -432,7 +434,8 @@
     <div class="assistant-dock" id="royal-assistant" hidden>
         <button class="assistant-capsule" id="assistant-open" type="button" aria-expanded="false" aria-controls="assistant-panel">
             <span class="assistant-mark" aria-hidden="true">R</span>
-            <span class="assistant-capsule-copy"><b>Royal Insights</b><small>Drag a card here or ask anything</small></span>
+            <span class="assistant-ai-badge" aria-hidden="true">AI</span>
+            <span class="assistant-capsule-copy"><b>Royal Insights</b><small id="assistant-capsule-hint">Drop a card to send it to AI</small></span>
             <span class="assistant-capsule-arrow" aria-hidden="true">↑</span>
         </button>
         <section class="assistant-panel" id="assistant-panel" aria-label="Royal Insights chat" aria-hidden="true">
@@ -466,14 +469,6 @@
                     <button type="button">How are sales today?</button>
                     <button type="button">What is my best seller?</button>
                     <button type="button">How many orders are in progress?</button>
-                </div>
-            </div>
-
-            <!-- Drop zone overlay — shown while dragging a card -->
-            <div class="assistant-drop-zone" id="assistant-drop-zone" aria-hidden="true">
-                <div class="assistant-drop-hint">
-                    <span class="assistant-drop-icon">📊</span>
-                    <span>Drop card to analyze</span>
                 </div>
             </div>
 

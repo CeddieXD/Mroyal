@@ -1,23 +1,32 @@
 import { api, subscribeEvents, imageUrl } from './api.js';
 
 const state = {
-    filter: 'ALL',          // ALL | VERIFIED | PREPARING | READY
+    filter: 'ALL',          // ALL | VERIFIED | PREPARING | SERVED
     orders: [],             // full kitchen list from server
     newCount: 0,            // bell counter — reset when user views incoming
     seenIds: new Set(),
 };
 
 const $ = sel => document.querySelector(sel);
+const SOUND_STORAGE_KEY = 'mango-royal-kitchen-sound-muted';
+const alertedIncomingOrderIds = new Set();
+let soundEnabled = true;
+let alertAudioContext = null;
+try {
+    soundEnabled = localStorage.getItem(SOUND_STORAGE_KEY) !== 'muted';
+} catch (error) {
+    console.warn('Could not read kitchen sound preference:', error);
+}
 const formatAddOns = addOns => addOns.map(addon => {
     if (typeof addon === 'string') return addon;
     return `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`;
 }).join(', ');
 
 // The state machine — mirrors backend TRANSITIONS.
-const NEXT = { VERIFIED: 'PREPARING', PREPARING: 'READY' };
-const BACK = { PREPARING: 'VERIFIED', READY: 'PREPARING' };
+const NEXT = { VERIFIED: 'PREPARING', PREPARING: 'SERVED' };
+const BACK = { PREPARING: 'VERIFIED', SERVED: 'PREPARING' };
 
-const STATUS_LABEL = { VERIFIED: 'Incoming', PREPARING: 'Preparing', READY: 'Ready' };
+const STATUS_LABEL = { VERIFIED: 'Incoming', PREPARING: 'Preparing', SERVED: 'Served' };
 
 function elapsed(iso) {
     const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
@@ -30,12 +39,12 @@ function elapsed(iso) {
 
 /* ---------- rendering ---------- */
 function renderCounts() {
-    const by = { VERIFIED: 0, PREPARING: 0, READY: 0 };
+    const by = { VERIFIED: 0, PREPARING: 0, SERVED: 0 };
     for (const o of state.orders) if (by[o.status] != null) by[o.status]++;
     $('#count-ALL').textContent       = state.orders.length;
     $('#count-VERIFIED').textContent  = by.VERIFIED;
     $('#count-PREPARING').textContent = by.PREPARING;
-    $('#count-READY').textContent     = by.READY;
+    $('#count-SERVED').textContent    = by.SERVED + state.orders.filter(order => order.status === 'READY').length;
 }
 
 function itemRow(i) {
@@ -52,16 +61,17 @@ function itemRow(i) {
       </div>`;
 }
 
-function cardActions(o) {
+function cardActions(o, oldestIncomingId) {
     const next = NEXT[o.status];
     const back = BACK[o.status];
     const parts = [];
     if (next) {
         const label = next === 'PREPARING' ? 'Start Preparing'
-                    : next === 'READY'     ? 'Mark Ready'
+                    : next === 'SERVED'    ? 'Mark Served'
                     : `→ ${STATUS_LABEL[next]}`;
-        const cls   = next === 'READY' ? 'btn-success' : 'btn-primary';
-        parts.push(`<button class="btn ${cls}" data-act="next">${label}</button>`);
+        const cls   = next === 'SERVED' ? 'btn-success' : 'btn-primary';
+        const blocked = o.status === 'VERIFIED' && Number(o.rawId) !== oldestIncomingId;
+        parts.push(`<button class="btn ${cls}" data-act="next" ${blocked ? 'disabled title="Start the oldest incoming order first."' : ''}>${label}</button>`);
     }
     if (back) {
         parts.push(`<button class="btn btn-ghost" data-act="back" title="Move back">↶ ${STATUS_LABEL[back]}</button>`);
@@ -69,60 +79,62 @@ function cardActions(o) {
     return parts.join('');
 }
 
-function cardHtml(o, draggable = false) {
+function cardHtml(o, oldestIncomingId, draggable = false) {
+    const displayStatus = o.status === 'READY' ? 'SERVED' : o.status;
+    const displayOrder = displayStatus === o.status ? o : { ...o, status: displayStatus };
     return `
-      <div class="card status-${o.status}" data-id="${o.rawId}" data-status="${o.status}"${draggable ? ' draggable="true"' : ''}>
+      <div class="card status-${displayStatus}" data-id="${o.rawId}" data-status="${displayStatus}"${draggable ? ' draggable="true"' : ''}>
         <div class="card-header">
           <div>
             <div class="order-id">#${o.orderId}</div>
             <div class="ts">${elapsed(o.createdAt)}</div>
           </div>
-          <div class="badges">
-            <span class="badge ${o.orderType === 'Dine-in' ? 'badge-dinein' : 'badge-takeout'}">
-              ${o.orderType === 'Dine-in' ? '🍽 Dine-in' : '🥤 Take-out'}
-            </span>
-          </div>
         </div>
         <div class="card-body">
-          ${o.items.map(itemRow).join('')}
+          ${displayOrder.items.map(itemRow).join('')}
         </div>
-        <div class="card-actions">${cardActions(o)}</div>
+        <div class="card-actions">${cardActions(displayOrder, oldestIncomingId)}</div>
       </div>`;
 }
 
 function render() {
     const board = $('#board');
     const empty = $('#empty-state');
+    const orders = [...state.orders].sort((a, b) =>
+        new Date(a.createdAt) - new Date(b.createdAt) || Number(a.rawId) - Number(b.rawId)
+    );
+    const oldestIncoming = orders.find(order => order.status === 'VERIFIED');
+    const oldestIncomingId = oldestIncoming ? Number(oldestIncoming.rawId) : null;
 
     if (state.filter === 'ALL') {
         empty.classList.add('hidden');
-        const byStatus = { VERIFIED: [], PREPARING: [], READY: [] };
-        for (const o of state.orders) if (byStatus[o.status]) byStatus[o.status].push(o);
-        // newest first inside each column
-        for (const k of Object.keys(byStatus)) byStatus[k].reverse();
+        const byStatus = { VERIFIED: [], PREPARING: [], SERVED: [] };
+        for (const o of orders) {
+            const status = o.status === 'READY' ? 'SERVED' : o.status;
+            if (byStatus[status]) byStatus[status].push(o);
+        }
 
         board.innerHTML = `
           <div class="columns">
-            ${['VERIFIED', 'PREPARING', 'READY'].map(s => `
+            ${['VERIFIED', 'PREPARING', 'SERVED'].map(s => `
               <section class="column col-${s}" data-drop="${s}">
                 <div class="col-header">
                   <span class="col-title">${STATUS_LABEL[s]}</span>
                   <span class="badge badge-${s === 'VERIFIED' ? 'yellow' : s === 'PREPARING' ? 'blue' : 'green'}">${byStatus[s].length}</span>
                 </div>
                 <div class="col-body">
-                  ${byStatus[s].map(o => cardHtml(o, true)).join('') || `<div class="empty col-empty">Drop here</div>`}
+                  ${byStatus[s].map(o => cardHtml(o, oldestIncomingId, s !== 'SERVED' && o.status !== 'READY')).join('') || `<div class="empty col-empty">No orders</div>`}
                 </div>
               </section>`).join('')}
           </div>`;
-        wireDnd();
     } else {
-        const list = state.orders.filter(o => o.status === state.filter).reverse();
+        const list = orders.filter(o => (o.status === 'READY' ? 'SERVED' : o.status) === state.filter);
         if (!list.length) {
             board.innerHTML = '';
             empty.classList.remove('hidden');
         } else {
             empty.classList.add('hidden');
-            board.innerHTML = `<div class="grid">${list.map(cardHtml).join('')}</div>`;
+            board.innerHTML = `<div class="grid">${list.map(order => cardHtml(order, oldestIncomingId)).join('')}</div>`;
         }
     }
 
@@ -130,9 +142,12 @@ function render() {
         const o = state.orders.find(x => String(x.rawId) === el.dataset.id);
         if (!o) return;
         el.querySelectorAll('[data-act]').forEach(btn =>
-            btn.addEventListener('click', () => handleAction(btn.dataset.act, o))
+            btn.addEventListener('click', () =>
+                handleAction(btn.dataset.act, o.status === 'READY' ? { ...o, status: 'SERVED' } : o)
+            )
         );
     });
+    if (state.filter === 'ALL') wireDnd(oldestIncomingId);
 }
 
 /* ---------- drag & drop (ALL view only) ---------- */
@@ -140,11 +155,12 @@ function render() {
 // drop doesn't round-trip just to receive a 409.
 const ALLOWED = {
     VERIFIED:  new Set(['PREPARING']),
-    PREPARING: new Set(['READY', 'VERIFIED']),
+    PREPARING: new Set(['SERVED', 'VERIFIED']),
+    SERVED:    new Set(['PREPARING']),
     READY:     new Set(['PREPARING']),
 };
 
-function wireDnd() {
+function wireDnd(oldestIncomingId) {
     let dragId = null;
     let dragFrom = null;
 
@@ -152,6 +168,12 @@ function wireDnd() {
         card.addEventListener('dragstart', e => {
             dragId = card.dataset.id;
             dragFrom = card.dataset.status;
+            if (dragFrom === 'VERIFIED' && Number(dragId) !== oldestIncomingId) {
+                e.preventDefault();
+                dragId = null;
+                dragFrom = null;
+                return;
+            }
             card.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
             // Firefox needs data set for the drag to fire.
@@ -168,7 +190,8 @@ function wireDnd() {
         const target = col.dataset.drop;
         col.addEventListener('dragover', e => {
             if (!dragFrom) return;
-            const ok = dragFrom === target || (ALLOWED[dragFrom] && ALLOWED[dragFrom].has(target));
+            const normalizedTarget = target === 'READY' ? 'SERVED' : target;
+            const ok = dragFrom === normalizedTarget || (ALLOWED[dragFrom] && ALLOWED[dragFrom].has(normalizedTarget));
             if (!ok) { col.classList.add('drop-bad'); return; }
             e.preventDefault(); // enable drop
             col.classList.add('drop-ok');
@@ -177,17 +200,18 @@ function wireDnd() {
         col.addEventListener('drop', e => {
             e.preventDefault();
             col.classList.remove('drop-ok', 'drop-bad');
-            if (!dragId || dragFrom === target) return;
-            if (!ALLOWED[dragFrom] || !ALLOWED[dragFrom].has(target)) return;
+            const normalizedTarget = target === 'READY' ? 'SERVED' : target;
+            if (!dragId || dragFrom === normalizedTarget) return;
+            if (!ALLOWED[dragFrom] || !ALLOWED[dragFrom].has(normalizedTarget)) return;
 
             const id = dragId;
             // Optimistic update so the card jumps instantly.
             const o = state.orders.find(x => String(x.rawId) === id);
-            if (o) o.status = target;
+            if (o) o.status = normalizedTarget;
             renderCounts();
             render();
 
-            api.setStatus(id, target).then(refresh).catch(err => {
+            api.setStatus(id, normalizedTarget).then(refresh).catch(err => {
                 alert('Move failed: ' + err.message);
                 refresh();
             });
@@ -239,14 +263,105 @@ function handleAction(act, o) {
         .catch(e => alert('Status update failed: ' + e.message));
 }
 
-function playDing() {
-    const a = $('#ding');
-    if (a) a.play().catch(() => {});
+function syncSoundToggle() {
+    const button = $('#sound-toggle');
+    if (!button) return;
+    button.textContent = soundEnabled ? 'Mute sound' : 'Unmute sound';
+    button.setAttribute('aria-pressed', String(soundEnabled));
+}
+
+async function unlockAlertAudio() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+        console.warn('Audio alerts are not supported by this browser.');
+        return;
+    }
+    if (!alertAudioContext) alertAudioContext = new AudioContextClass();
+    if (alertAudioContext.state === 'suspended') await alertAudioContext.resume();
+}
+
+function playOrderAlertSound() {
+    if (!soundEnabled || !alertAudioContext || alertAudioContext.state !== 'running') return;
+    const oscillator = alertAudioContext.createOscillator();
+    const gain = alertAudioContext.createGain();
+    const now = alertAudioContext.currentTime;
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(880, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    oscillator.connect(gain);
+    gain.connect(alertAudioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.23);
+}
+
+function showOrderAlert(payload) {
+    const root = $('#order-alerts');
+    if (!root) return;
+    const orderNumber = payload?.orderNumber || payload?.queueNumber || payload?.orderId || payload?.id;
+    const toast = document.createElement('div');
+    toast.className = 'order-alert';
+    const message = document.createElement('div');
+    const title = document.createElement('strong');
+    const detail = document.createElement('span');
+    title.textContent = 'New order from POS';
+    detail.textContent = orderNumber ? `Order #${orderNumber} is ready for the kitchen.` : 'A new order is ready for the kitchen.';
+    message.append(title, detail);
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'order-alert-dismiss';
+    dismiss.setAttribute('aria-label', 'Dismiss notification');
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => toast.remove());
+    toast.append(message, dismiss);
+    root.appendChild(toast);
+    window.setTimeout(() => toast.remove(), 8000);
+    if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('New order for kitchen', { body: detail.textContent });
+    }
+}
+
+function wasOrderAlreadyAlerted(payload) {
+    const orderId = payload?.orderId ?? payload?.queueNumber;
+    if (orderId == null) return false;
+    const key = String(orderId);
+    if (alertedIncomingOrderIds.has(key)) return true;
+    alertedIncomingOrderIds.add(key);
+    if (alertedIncomingOrderIds.size > 100) {
+        alertedIncomingOrderIds.delete(alertedIncomingOrderIds.values().next().value);
+    }
+    return false;
 }
 
 /* ---------- wiring ---------- */
 function wire() {
     $('#today').textContent = new Date().toDateString();
+    syncSoundToggle();
+
+    document.addEventListener('pointerdown', () => {
+        unlockAlertAudio().catch(error => console.warn('Could not enable kitchen alert sound:', error));
+    }, { once: true, capture: true });
+    document.addEventListener('keydown', () => {
+        unlockAlertAudio().catch(error => console.warn('Could not enable kitchen alert sound:', error));
+    }, { once: true, capture: true });
+    $('#sound-toggle').addEventListener('click', async () => {
+        soundEnabled = !soundEnabled;
+        try {
+            localStorage.setItem(SOUND_STORAGE_KEY, soundEnabled ? 'enabled' : 'muted');
+        } catch (error) {
+            console.warn('Could not save kitchen sound preference:', error);
+        }
+        syncSoundToggle();
+        if (soundEnabled) {
+            try {
+                await unlockAlertAudio();
+                playOrderAlertSound();
+            } catch (error) {
+                console.warn('Could not enable kitchen alert sound:', error);
+            }
+        }
+    });
 
     document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
         document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -260,25 +375,20 @@ function wire() {
 
     $('#refresh-btn').addEventListener('click', refresh);
 
-    if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-    }
 }
 
 wire();
 refresh();
 
-// Live push — new order verified in POS or any status change.
+// Live push — a POS verification creates a new kitchen order.
 subscribeEvents((type, payload) => {
     clearTimeout(window.__kitchenRefreshT);
     window.__kitchenRefreshT = setTimeout(refresh, 150);
 
-    if (type === 'change' && payload && payload.status === 'VERIFIED' && payload.source !== 'kitchen') {
-        // A cashier just verified an order → new work for the kitchen.
-        playDing();
-        if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('New order for kitchen', { body: `Order queued` });
-        }
+    if (type === 'change' && payload?.status === 'VERIFIED' && payload.source === 'pos'
+        && !wasOrderAlreadyAlerted(payload)) {
+        showOrderAlert(payload);
+        playOrderAlertSound();
     }
 });
 

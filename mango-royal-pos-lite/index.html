@@ -18,9 +18,11 @@
         </div>
         <div class="topbar-right">
             <span id="today" class="today"></span>
+            <button id="sound-toggle" class="btn btn-ghost" type="button" aria-pressed="true">Mute sound</button>
             <button id="logout-btn" class="btn btn-danger">Logout</button>
         </div>
     </header>
+    <div id="order-alerts" class="order-alerts" aria-live="polite" aria-atomic="false"></div>
 
     <nav class="tabs">
         <button class="tab active" data-status="PENDING">
@@ -37,7 +39,16 @@
     <div class="toolbar">
         <input type="search" id="search" placeholder="Search by Order Number…">
         <button id="new-walkin-btn" class="btn btn-brand">+ New Walk-in Order</button>
+        <button id="eod-receipt-btn" class="btn btn-ghost" type="button" hidden>🧾 END OF THE DAY RECEIPT</button>
         <button id="refresh-btn" class="btn btn-ghost" title="Refresh">↻</button>
+    </div>
+    <div id="selection-toolbar" class="selection-toolbar hidden" aria-live="polite">
+        <span id="selection-status">Hold a pending order card to select it. Select up to 10 orders.</span>
+        <div class="selection-actions">
+            <button id="bulk-print-btn" class="btn btn-ghost" type="button">Print Selected</button>
+            <button id="bulk-void-btn" class="btn btn-danger" type="button">Void Selected</button>
+            <button id="clear-selection-btn" class="btn btn-outline" type="button">Clear Selection</button>
+        </div>
     </div>
 
     <main id="orders-grid" class="orders-grid"></main>

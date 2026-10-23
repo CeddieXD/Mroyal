@@ -56,5 +56,10 @@ For a standalone POS run, start the shared middleware (from
 
 - Backend creates or upgrades a `pos_order_meta` side table on startup (payment, discount, discount ID details, and void reason). The existing kiosk schema is untouched.
 - Payment verification separates the amount due from the discount, captures the PWD ID number or Senior citizen name and birthdate, and calculates remaining balance/change. Discount ID details are stored with POS order metadata and are not included in the normal order-list response.
+- Walk-in and incoming-order editors combine identical product, size, and add-on selections, and allow staff to adjust up to 10 add-ons per item using the kiosk's current add-on prices.
+- PWD and Senior payment discounts support a group individual-share calculation or cashier-selected eligible servings. The POS removes the 12% VAT component from the eligible gross amount, applies the 20% discount to its VAT-exclusive value, and stores the eligible portion, calculation basis, cardholder counts, VAT exemption, discount, and received payment for Admin transaction details.
+- Admin settings can enable the POS End-of-Day Receipt button. Each print creates a stored daily summary record with sales, discounts, VAT exemption, payment methods, top items, cashier, and print status.
+- PWD ID validation uses the requested `RR-PPMM-BBB-NNNNNNN` format, and the Senior discount requires a birthdate confirming the holder is at least 60 years old.
+- Hold a pending order card to enter multi-select mode; select up to 10 pending orders to print their receipts or void them one at a time with an order-specific reason.
 - Kiosk `POST /api/orders` still works unchanged — those orders default to `status = 'PENDING'` and show up in this POS immediately.
 - Frontend polls every 15 s; hit the refresh button (↻) for an immediate update.

@@ -13,6 +13,9 @@ const DEFAULT_ADMIN_SETTINGS = {
     security: {
         sessionTimeoutMinutes: 480,
     },
+    posFeatures: {
+        endOfDayReceiptEnabled: false,
+    },
     appearance: {
         theme: 'light',
         accentColor: '#f97316',
@@ -59,6 +62,10 @@ async function readAdminSettings() {
             ...DEFAULT_ADMIN_SETTINGS.security,
             ...(stored.security || {}),
         },
+        posFeatures: {
+            ...DEFAULT_ADMIN_SETTINGS.posFeatures,
+            ...(stored.posFeatures || {}),
+        },
         appearance: {
             ...DEFAULT_ADMIN_SETTINGS.appearance,
             ...(stored.appearance || {}),
@@ -70,7 +77,7 @@ function normalizeAdminSettings(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new SettingsValidationError('Settings must be an object.');
     }
-    const { reportFrequency, defaultFormat, recipients, reportSections, security, appearance } = value;
+    const { reportFrequency, defaultFormat, recipients, reportSections, security, posFeatures, appearance } = value;
     if (!['daily', 'weekly', 'monthly', 'quarterly'].includes(reportFrequency)) {
         throw new SettingsValidationError('Choose a valid report frequency.');
     }
@@ -92,6 +99,9 @@ function normalizeAdminSettings(value) {
     if (!Number.isInteger(timeout) || timeout < 5 || timeout > 480) {
         throw new SettingsValidationError('Session timeout must be between 5 and 480 minutes.');
     }
+    if (typeof posFeatures?.endOfDayReceiptEnabled !== 'boolean') {
+        throw new SettingsValidationError('Choose whether the End-of-Day Receipt button is enabled on POS.');
+    }
     const themes = ['light', 'dark', 'auto'];
     const accents = ['#f97316', '#2563eb', '#16a34a', '#9333ea'];
     if (!themes.includes(appearance?.theme) || !accents.includes(appearance?.accentColor)) {
@@ -103,6 +113,7 @@ function normalizeAdminSettings(value) {
         recipients: emails.join(', '),
         reportSections: Object.fromEntries(sectionKeys.map(key => [key, reportSections[key]])),
         security: { sessionTimeoutMinutes: timeout },
+        posFeatures: { endOfDayReceiptEnabled: posFeatures.endOfDayReceiptEnabled },
         appearance: {
             theme: appearance.theme,
             accentColor: appearance.accentColor,

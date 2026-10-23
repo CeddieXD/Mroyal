@@ -13,7 +13,15 @@ function normalizeAddOns(value) {
         if (!Number.isInteger(quantity) || quantity < 1) {
             throw new Error('Stored add-on quantity is invalid.');
         }
-        return { name: addon.name, quantity };
+        const normalized = { name: addon.name, quantity };
+        if (addon.price !== undefined) {
+            const price = Number(addon.price);
+            if (!Number.isFinite(price) || price < 0) {
+                throw new Error('Stored add-on price is invalid.');
+            }
+            normalized.price = price;
+        }
+        return normalized;
     });
 }
 

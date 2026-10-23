@@ -1,6 +1,6 @@
 // Kitchen module — endpoints consumed by the Mango Royal Kitchen lite frontend.
 // Kitchen flow picks up after the cashier verifies an order:
-//   VERIFIED  →  PREPARING  →  READY
+//   VERIFIED  →  PREPARING  →  SERVED
 // Reuses the shared mysql2 pool and the POS event bus so all three surfaces
 // (kiosk, POS, kitchen) refresh in real time.
 const express = require('express');
@@ -10,12 +10,14 @@ const { ensureAuditTable, normalizeAddOns, writeOrderStatusAudit } = require('..
 
 const router = express.Router();
 
-const KITCHEN_STATUSES = ['VERIFIED', 'PREPARING', 'READY'];
+const KITCHEN_ORDER_STATUSES = ['VERIFIED', 'PREPARING', 'SERVED', 'READY'];
 const TRANSITIONS = {
     VERIFIED:  ['PREPARING'],
-    PREPARING: ['READY', 'VERIFIED'],
+    PREPARING: ['SERVED', 'VERIFIED'],
+    SERVED:    ['PREPARING'],
     READY:     ['PREPARING'],
 };
+const KITCHEN_TARGET_STATUSES = ['PREPARING', 'SERVED', 'VERIFIED'];
 
 const queueNumber = (orderId) => 'A' + String(orderId).padStart(3, '0').slice(-3);
 const imageUrl = (name) => name ? `/images/${name}` : null;
@@ -47,15 +49,15 @@ router.get('/events', (req, res) => {
     });
 });
 
-// Load every order currently in the kitchen pipeline (Verified/Preparing/Ready)
+// Load every order currently in the kitchen pipeline (Verified/Preparing/Served)
 // in one query, then attach items.
 async function loadKitchenOrders() {
     const [orderRows] = await db.query(
-        `SELECT o.order_id, o.total_price, o.order_type, o.created_at, o.status
+        `SELECT o.order_id, o.total_price, o.created_at, o.status
          FROM orders o
-         WHERE o.status IN (?, ?, ?)
+         WHERE o.status IN (?, ?, ?, ?)
          ORDER BY o.created_at ASC`,
-        KITCHEN_STATUSES
+        KITCHEN_ORDER_STATUSES
     );
     if (!orderRows.length) return [];
 
@@ -74,7 +76,6 @@ async function loadKitchenOrders() {
         orderId: queueNumber(o.order_id),
         rawId: o.order_id,
         status: o.status,
-        orderType: o.order_type,
         total: Number(o.total_price),
         createdAt: new Date(o.created_at).toISOString(),
         items: itemRows
@@ -101,11 +102,11 @@ router.get('/orders', async (_req, res) => {
 });
 
 // POST /api/kitchen/orders/:id/status  { status }
-// Only the small state machine above is allowed — anything else 400s.
+// Only the oldest incoming order may start; any preparing order may be served.
 router.post('/orders/:id/status', async (req, res) => {
     const orderId = Number(req.params.id);
     const next = String((req.body && req.body.status) || '').toUpperCase();
-    if (!KITCHEN_STATUSES.includes(next)) {
+    if (!KITCHEN_TARGET_STATUSES.includes(next)) {
         return res.status(400).json({ error: 'Invalid status' });
     }
     try {
@@ -118,6 +119,16 @@ router.post('/orders/:id/status', async (req, res) => {
             throw err;
         }
         try {
+            let oldestIncomingId = null;
+            if (next === 'PREPARING') {
+                const [oldestIncoming] = await connection.query(
+                    `SELECT order_id FROM orders
+                     WHERE status = 'VERIFIED'
+                     ORDER BY created_at ASC, order_id ASC
+                     LIMIT 1 FOR UPDATE`
+                );
+                oldestIncomingId = oldestIncoming[0]?.order_id ?? null;
+            }
             const [rows] = await connection.query(
                 `SELECT status FROM orders WHERE order_id = ? FOR UPDATE`,
                 [orderId]
@@ -127,6 +138,11 @@ router.post('/orders/:id/status', async (req, res) => {
                 return res.status(404).json({ error: 'Order not found' });
             }
             const current = rows[0].status;
+            if (current === 'VERIFIED' && next === 'PREPARING'
+                && Number(orderId) !== Number(oldestIncomingId)) {
+                await connection.rollback();
+                return res.status(409).json({ error: 'Start the oldest incoming order first.' });
+            }
             const allowed = TRANSITIONS[current] || [];
             if (!allowed.includes(next)) {
                 await connection.rollback();

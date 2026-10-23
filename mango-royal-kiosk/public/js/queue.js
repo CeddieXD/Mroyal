@@ -3,68 +3,109 @@ export function initQueue({ onDone }) {
     const screen = document.getElementById('queue-screen');
     const numEl = screen.querySelector('#queue-number');
     const cdEl = screen.querySelector('#q-countdown');
+    const countdown = screen.querySelector('#q-countdown-wrap');
+    const status = screen.querySelector('#q-print-status');
+    const digitalPrint = screen.querySelector('#q-digital');
+    const digitalNumber = screen.querySelector('#q-digital-number');
     const doneBtn = screen.querySelector('#q-done');
     const printBtn = screen.querySelector('#q-print');
     let lastOrderData = null;
     let timer = null;
+    let printInProgress = false;
 
-    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const stop = () => {
+        if (timer) {
+            clearInterval(timer);
+            timer = null;
+        }
+    };
 
-    doneBtn.onclick = () => { stop(); onDone(); };
-
-    if (printBtn) {
-        printBtn.onclick = () => {
-            const w = window.open('', '_blank', 'width=380,height=520');
-            if (!w) return window.print();
-            w.document.write(`
-                <html>
-                <head>
-                    <title>Mango Royal Receipt</title>
-                    <style>
-                        body { font-family: monospace; padding: 20px; font-size: 13px; text-align: center; }
-                        h2 { margin: 0; font-size: 18px; }
-                        p { margin: 4px 0; color: #555; }
-                        .line { border-top: 1px dashed #000; margin: 12px 0; }
-                        .q-num { font-size: 36px; font-weight: bold; margin: 10px 0; }
-                        .text-left { text-align: left; }
-                    </style>
-                </head>
-                <body>
-                    <h2>MANGO ROYAL</h2>
-                    <p>Official Order Acknowledgement</p>
-                    <div class="line"></div>
-                    <p>QUEUE NUMBER</p>
-                    <div class="q-num">${numEl.innerText}</div>
-                    <div class="line"></div>
-                    <p>Date: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
-                    <p>Device: KIOSK_01</p>
-                    <p>Status: PENDING PAYMENT</p>
-                    <div class="line"></div>
-                    <p>Please present this number to the cashier for payment and verification.</p>
-                    <p>Thank you for choosing Mango Royal!</p>
-                </body>
-                </html>
-            `);
-            w.document.close();
-            w.focus();
-            setTimeout(() => { w.print(); w.close(); }, 300);
-        };
+    function startCountdown() {
+        stop();
+        let seconds = 15;
+        countdown.classList.remove('hidden');
+        cdEl.textContent = seconds;
+        timer = setInterval(() => {
+            seconds--;
+            cdEl.textContent = seconds;
+            if (seconds <= 0) {
+                stop();
+                onDone();
+            }
+        }, 1000);
     }
 
-    return {
-        show: ({ queueNumber }) => {
-            numEl.innerText = queueNumber || '—';
-            screen.classList.remove('hidden');
+    function showDigitalPrint(receipt) {
+        digitalNumber.textContent = receipt?.queueNumber || numEl.textContent;
+        digitalPrint.classList.remove('hidden');
+        screen.classList.add('has-digital-print');
+    }
 
-            let secs = 15;
-            cdEl.innerText = secs;
-            stop();
-            timer = setInterval(() => {
-                secs--;
-                cdEl.innerText = secs;
-                if (secs <= 0) { stop(); onDone(); }
-            }, 1000);
+    async function sendPrint() {
+        if (printInProgress) return;
+        const { orderId, printToken, acknowledgement } = lastOrderData || {};
+        stop();
+        countdown.classList.add('hidden');
+        printBtn.disabled = true;
+        printBtn.classList.add('hidden');
+        doneBtn.disabled = true;
+        status.textContent = 'Sending your order ticket to the printer...';
+
+        try {
+            if (!orderId || !printToken) {
+                throw new Error('The order print permission is unavailable.');
+            }
+            printInProgress = true;
+            const response = await fetch(`${window.API_BASE || window.location.origin}/api/kiosk/orders/${orderId}/acknowledgement-print`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ printToken }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const message = result.details
+                    ? `${result.error || 'Print failed'}: ${result.details}`
+                    : result.error || `HTTP ${response.status}`;
+                throw new Error(message);
+            }
+            digitalPrint.classList.add('hidden');
+            screen.classList.remove('has-digital-print');
+            status.textContent = 'Your order ticket was sent to the printer.';
+            startCountdown();
+        } catch (error) {
+            console.error('Kiosk order ticket could not be printed:', error);
+            showDigitalPrint(acknowledgement);
+            status.textContent = `Printer unavailable (${error.message}). Keep this screen open and show the digital ticket to the cashier.`;
+            printBtn.classList.remove('hidden');
+        } finally {
+            printInProgress = false;
+            printBtn.disabled = false;
+            doneBtn.disabled = false;
+        }
+    }
+
+    doneBtn.onclick = () => {
+        stop();
+        onDone();
+    };
+    printBtn.onclick = () => { void sendPrint(); };
+
+    return {
+        show: ({ queueNumber, orderId, printToken, acknowledgement }) => {
+            lastOrderData = { orderId, printToken, acknowledgement };
+            numEl.textContent = queueNumber || '—';
+            digitalPrint.classList.add('hidden');
+            screen.classList.remove('has-digital-print');
+            printBtn.classList.add('hidden');
+            countdown.classList.add('hidden');
+            doneBtn.disabled = false;
+            status.textContent = 'Sending your order ticket to the printer...';
+            screen.classList.remove('hidden');
+            void sendPrint();
         },
-        hide: () => { stop(); screen.classList.add('hidden'); },
+        hide: () => {
+            stop();
+            screen.classList.add('hidden');
+        },
     };
 }

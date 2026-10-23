@@ -5,14 +5,12 @@ export function initReview({ onBack, onProceed, onEditItem }) {
     const countEl = screen.querySelector('#rev-count');
     const subEl = screen.querySelector('#rev-subtotal');
     const totalEl = screen.querySelector('#rev-total');
-    const otEl = screen.querySelector('#rev-order-type');
 
     screen.querySelector('#rev-back').onclick = onBack;
     screen.querySelector('#rev-add-more').onclick = onBack;
     screen.querySelector('#rev-checkout').onclick = () => onProceed();
 
-    const render = ({ items, orderType }) => {
-        otEl.innerText = orderType;
+    const render = ({ items }) => {
         itemsEl.innerHTML = '';
         let subtotal = 0, count = 0;
         items.forEach((item, index) => {

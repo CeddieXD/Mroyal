@@ -13,26 +13,58 @@ role-specific sign-in.
 ## First-time setup
 
 1. In MySQL, create the schema and tables using the SQL file above.
-2. Configure and start the backend from PowerShell:
+2. Install the printer-server dependency:
 
    ```powershell
-   cd .\mango-royal-kiosk\mango-royal-backend
+   cd .\mango-royal-printer-server
+   npm install
+   Copy-Item .\.env.example .\.env
+   cd ..\mango-royal-kiosk\mango-royal-backend
+   ```
+
+3. Configure the backend from PowerShell:
+
+   ```powershell
    Copy-Item .\.env.example .\.env
    ```
 
-   Edit `.env` with your MySQL connection details, then run:
+   Edit `.env` with your MySQL connection details and, if you want to use the
+   Admin Royal Insights assistant, set `AI_API` to your Groq API key. Then install
+   backend dependencies:
 
    ```powershell
    npm install
+   ```
+
+4. Start the printer service and backend. `Launchers\1_Run_Backend.bat`
+   starts both services automatically. To start them manually, open a terminal
+   from the repository root and start the printer service first:
+
+   ```powershell
+   cd .\mango-royal-printer-server
    npm start
    ```
 
-   The backend listens on port `3000` by default. On Windows, launching it again
-   replaces the existing Mango Royal backend process on that port, so the latest
-   code and login routes are loaded without a manual task kill. An unrelated
-   process occupying the port is left untouched and reported as an error.
+   Then start the backend from its terminal:
 
-3. Open three additional PowerShell terminals from the repository root and
+   ```powershell
+   cd .\mango-royal-kiosk\mango-royal-backend
+   npm start
+   ```
+
+   The backend listens on port `3000` by default. `npm start` uses Node's watch
+   mode to restart the backend when its source files change. On Windows, launching
+   it again replaces the existing Mango Royal backend process on that port, so
+   the latest code and login routes are loaded without a manual task kill. An
+   unrelated process occupying the port is left untouched and reported as an error.
+   Set `PRINTER_NAME` in `mango-royal-printer-server\.env` to select a Windows
+   printer queue; if blank, Windows' default printer is used.
+   Generated Admin report PDFs are saved under
+   `mango-royal-printer-server\reports` by default; set `REPORT_PDF_DIR` to
+   change the destination. The printer server listens only on the backend PC
+   at `127.0.0.1:3101`.
+
+5. Open three additional PowerShell terminals from the repository root and
    serve each staff app:
 
    ```powershell
@@ -47,7 +79,7 @@ role-specific sign-in.
    npx serve ".\Admin Dashboard Interface (2)" -l 4175
    ```
 
-4. Open the printed URLs:
+6. Open the printed URLs:
 
    - POS: `http://localhost:4173`
    - Kitchen: `http://localhost:4174`
@@ -70,6 +102,11 @@ These shared demo accounts are for local development only:
 
 An account can sign in only to its matching app. A successful sign-in lasts up
 to 8 hours, and each browser app has its own session.
+Successful staff sign-ins and sign-outs, along with Admin Dashboard actions,
+are stored in the backend `staff_activity_logs` table and shown in the Admin
+Dashboard Activity Log. POS and Kitchen Display also show and sound an in-app
+alert for their respective incoming-order events; each app has its own
+persistent Mute/Unmute setting.
 
 **Security warning:** the demo credentials are public in this README. Do not
 expose this development setup to the public internet or use the demo accounts
@@ -105,3 +142,8 @@ localhost); see [the kiosk setup guide](./mango-royal-kiosk/README.md).
 - App-specific details: [POS](./mango-royal-pos-lite/README.md),
   [Kitchen](./mango-royal-kitchen-lite/README.md), and
   [Admin](./Admin%20Dashboard%20Interface%20(2)/README.md).
+- Receipt print requests from the kiosk and POS are routed through the local
+  printer server. POS verification automatically queues the acknowledgement
+  receipt.
+  Admin report PDFs are generated and saved on the server; CSV and JSON exports
+  remain browser downloads.

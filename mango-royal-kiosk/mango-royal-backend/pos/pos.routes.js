@@ -3,6 +3,7 @@
 const express = require('express');
 const db = require('../config/db');
 const bus = require('./events');
+const { printText } = require('../printer-client');
 const {
     ensureAuditTable,
     loadOrderItemSnapshots,
@@ -10,6 +11,8 @@ const {
     writeItemAuditLogs,
     writeOrderStatusAudit,
 } = require('../audit-logs');
+const { calculateDiscount } = require('./discount-calculation');
+const { readAdminSettings } = require('../config/admin-settings');
 
 const router = express.Router();
 
@@ -39,6 +42,117 @@ router.get('/events', (req, res) => {
     });
 });
 
+router.get('/settings', async (_req, res) => {
+    try {
+        const settings = await readAdminSettings();
+        res.json({ endOfDayReceiptEnabled: settings.posFeatures.endOfDayReceiptEnabled });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch POS settings', details: err.message });
+    }
+});
+
+router.post('/end-of-day-receipt', async (req, res) => {
+    try {
+        const settings = await readAdminSettings();
+        if (!settings.posFeatures.endOfDayReceiptEnabled) {
+            return res.status(403).json({ error: 'End-of-Day Receipt printing is disabled by the administrator.' });
+        }
+        await ensureEndOfDayReceiptTable();
+        const [[totals]] = await db.query(`
+            SELECT DATE_FORMAT(CURRENT_DATE(), '%Y-%m-%d') AS businessDate,
+                   COUNT(o.order_id) AS totalOrders,
+                   COALESCE(SUM(o.status = 'VERIFIED'), 0) AS completedOrders,
+                   COALESCE(SUM(o.status = 'VOIDED'), 0) AS voidedOrders,
+                   COALESCE(SUM(CASE WHEN o.status = 'VERIFIED' THEN o.total_price ELSE 0 END), 0) AS grossSales,
+                   COALESCE(SUM(CASE WHEN o.status = 'VERIFIED' THEN COALESCE(m.vat_exempt_amount, 0) ELSE 0 END), 0) AS vatExemptAmount,
+                   COALESCE(SUM(CASE WHEN o.status = 'VERIFIED' THEN COALESCE(m.discount_amount, 0) ELSE 0 END), 0) AS discountAmount,
+                   COALESCE(SUM(CASE WHEN o.status = 'VERIFIED'
+                       THEN GREATEST(0, o.total_price - COALESCE(m.vat_exempt_amount, 0) - COALESCE(m.discount_amount, 0))
+                       ELSE 0 END), 0) AS netSales
+            FROM orders o
+            LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
+            WHERE DATE(o.created_at) = CURRENT_DATE()
+        `);
+        const [paymentRows] = await db.query(`
+            SELECT COALESCE(m.payment_method, IF(m.is_walkin = 1, 'Cash', 'GCash')) AS method,
+                   COUNT(o.order_id) AS transactions,
+                   COALESCE(SUM(GREATEST(0,
+                       o.total_price - COALESCE(m.vat_exempt_amount, 0) - COALESCE(m.discount_amount, 0)
+                   )), 0) AS amount
+            FROM orders o
+            LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
+            WHERE DATE(o.created_at) = CURRENT_DATE() AND o.status = 'VERIFIED'
+            GROUP BY method
+            ORDER BY method
+        `);
+        const [itemRows] = await db.query(`
+            SELECT p.name, SUM(oi.quantity) AS quantity,
+                   SUM(oi.quantity * oi.price_at_purchase) AS revenue
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.order_id
+            JOIN product_variants pv ON pv.variant_id = oi.variant_id
+            JOIN products p ON p.product_id = pv.product_id
+            WHERE DATE(o.created_at) = CURRENT_DATE() AND o.status = 'VERIFIED'
+            GROUP BY p.product_id, p.name
+            ORDER BY quantity DESC, revenue DESC
+            LIMIT 10
+        `);
+        const report = {
+            businessDate: totals.businessDate,
+            generatedAt: new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' }),
+            totalOrders: Number(totals.totalOrders),
+            completedOrders: Number(totals.completedOrders),
+            voidedOrders: Number(totals.voidedOrders),
+            grossSales: money(totals.grossSales),
+            vatExemptAmount: money(totals.vatExemptAmount),
+            discountAmount: money(totals.discountAmount),
+            netSales: money(totals.netSales),
+            paymentMethods: paymentRows.map(row => ({
+                method: row.method,
+                transactions: Number(row.transactions),
+                amount: money(row.amount),
+            })),
+            topItems: itemRows.map(row => ({
+                name: row.name,
+                quantity: Number(row.quantity),
+                revenue: money(row.revenue),
+            })),
+        };
+        const [record] = await db.query(
+            `INSERT INTO pos_end_of_day_receipts
+                (business_date, report_json, created_by)
+             VALUES (CURRENT_DATE(), ?, ?)`,
+            [JSON.stringify(report), req.staff.displayName]
+        );
+        try {
+            const result = await printText(endOfDayReceiptText(report));
+            await db.query(
+                `UPDATE pos_end_of_day_receipts
+                 SET print_status = 'PRINTED', printed_at = CURRENT_TIMESTAMP
+                 WHERE receipt_id = ?`,
+                [record.insertId]
+            );
+            res.json({ success: true, receiptId: record.insertId, report, print: result });
+        } catch (printError) {
+            await db.query(
+                `UPDATE pos_end_of_day_receipts
+                 SET print_status = 'FAILED', print_error = ?
+                 WHERE receipt_id = ?`,
+                [printError.message.slice(0, 500), record.insertId]
+            );
+            console.error(`[pos] end-of-day receipt ${record.insertId} was recorded but could not print:`, printError.message);
+            res.status(502).json({
+                error: 'End-of-Day Receipt was recorded but could not be printed.',
+                receiptId: record.insertId,
+                details: printError.message,
+            });
+        }
+    } catch (err) {
+        console.error('[pos] end-of-day receipt failed:', err.message);
+        res.status(500).json({ error: 'Could not create the End-of-Day Receipt.', details: err.message });
+    }
+});
+
 const STATUS = { PENDING: 'PENDING', VERIFIED: 'VERIFIED', VOIDED: 'VOIDED' };
 
 // Match the queue-number format the kiosk shows customers (server.js: 'A' + last 3 digits of order_id).
@@ -46,6 +160,56 @@ const queueNumber = (orderId) => 'A' + String(orderId).padStart(3, '0').slice(-3
 
 // Turn a bare "MangoRoyal.png" into a URL the POS frontend can load.
 const imageUrl = (name) => name ? `/images/${name}` : null;
+const money = amount => Math.round((Number(amount) + Number.EPSILON) * 100) / 100;
+
+async function ensureEndOfDayReceiptTable() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS pos_end_of_day_receipts (
+            receipt_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            business_date DATE NOT NULL,
+            report_json JSON NOT NULL,
+            print_status ENUM('PENDING', 'PRINTED', 'FAILED') NOT NULL DEFAULT 'PENDING',
+            print_error VARCHAR(500) NULL,
+            created_by VARCHAR(100) NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            printed_at TIMESTAMP NULL,
+            INDEX idx_pos_eod_receipts_date (business_date, created_at)
+        )
+    `);
+}
+
+function endOfDayReceiptText(report) {
+    const lines = [
+        'MANGO ROYAL',
+        'END OF DAY RECEIPT',
+        `Business date: ${report.businessDate}`,
+        `Printed: ${report.generatedAt}`,
+        '-'.repeat(38),
+        `Orders received: ${report.totalOrders}`,
+        `Completed orders: ${report.completedOrders}`,
+        `Voided orders: ${report.voidedOrders}`,
+        `Gross sales: PHP ${report.grossSales.toFixed(2)}`,
+        `VAT exemption: PHP ${report.vatExemptAmount.toFixed(2)}`,
+        `PWD/Senior discount: PHP ${report.discountAmount.toFixed(2)}`,
+        `NET SALES: PHP ${report.netSales.toFixed(2)}`,
+        '-'.repeat(38),
+        'PAYMENT METHODS',
+        ...report.paymentMethods.map(payment =>
+            `${payment.method}: PHP ${payment.amount.toFixed(2)} (${payment.transactions})`
+        ),
+        '-'.repeat(38),
+        'TOP ITEMS',
+        ...report.topItems.map(item =>
+            `${item.name} x${item.quantity} PHP ${item.revenue.toFixed(2)}`
+        ),
+        ...(report.topItems.length ? [] : ['No completed items']),
+        '-'.repeat(38),
+        'THIS IS NOT A SALES INVOICE',
+        '',
+        '',
+    ];
+    return lines.join('\n');
+}
 
 // Idempotent side table for POS-only metadata (payment, discount, void reason, walk-in flag)
 async function ensureMetaTable() {
@@ -56,6 +220,8 @@ async function ensureMetaTable() {
             payment_amount DECIMAL(10,2) NULL,
             discount_type VARCHAR(20) NULL,
             discount_amount DECIMAL(10,2) DEFAULT 0,
+            vat_exempt_amount DECIMAL(10,2) DEFAULT 0,
+            discount_details JSON NULL,
             pwd_id_number VARCHAR(100) NULL,
             senior_name VARCHAR(150) NULL,
             senior_birthdate DATE NULL,
@@ -71,6 +237,8 @@ async function ensureMetaTable() {
         ['pwd_id_number', 'VARCHAR(100) NULL'],
         ['senior_name', 'VARCHAR(150) NULL'],
         ['senior_birthdate', 'DATE NULL'],
+        ['vat_exempt_amount', 'DECIMAL(10,2) DEFAULT 0'],
+        ['discount_details', 'JSON NULL'],
     ];
     for (const [name, definition] of newColumns) {
         if (!existingColumns.has(name)) {
@@ -84,17 +252,20 @@ const metaTableReady = ensureMetaTable().catch(err => {
 });
 
 // Load orders + items for the given status filter
-async function loadOrders(status) {
+async function loadOrders(status, orderId = null) {
     await metaTableReady;
+    const orderFilter = orderId === null ? '' : ' AND o.order_id = ?';
+    const orderParams = orderId === null ? [status] : [status, orderId];
     const [orderRows] = await db.query(
-        `SELECT o.order_id, o.subtotal, o.total_price, o.order_type, o.created_at, o.status,
+        `SELECT o.order_id, o.subtotal, o.total_price, o.created_at, o.status,
                 m.payment_method, m.payment_amount, m.discount_type, m.discount_amount,
+                m.vat_exempt_amount, m.discount_details,
                 m.void_reason, m.is_walkin
          FROM orders o
          LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
-         WHERE o.status = ?
+         WHERE o.status = ?${orderFilter}
          ORDER BY o.created_at DESC`,
-        [status]
+        orderParams
     );
     if (!orderRows.length) return [];
 
@@ -108,19 +279,26 @@ async function loadOrders(status) {
          WHERE oi.order_id IN (?)`,
         [ids]
     );
+    const [addonRows] = await db.query('SELECT name, price FROM menu_addons');
+    const addonPrices = new Map(addonRows.map(addon => [addon.name, Number(addon.price)]));
 
     return orderRows.map(o => ({
         orderId: queueNumber(o.order_id),
         rawId: o.order_id,
         status: o.status,
         timestamp: new Date(o.created_at).toISOString().replace('T', ' ').slice(0, 19),
-        orderType: o.order_type,
         subtotal: Number(o.subtotal),
         total: Number(o.total_price),
         paymentMethod: o.payment_method || (o.is_walkin ? 'Cash' : 'GCash'),
         paymentAmount: o.payment_amount != null ? Number(o.payment_amount) : null,
         discountType: o.discount_type,
         discountAmount: o.discount_amount != null ? Number(o.discount_amount) : 0,
+        vatExemptAmount: o.vat_exempt_amount != null ? Number(o.vat_exempt_amount) : 0,
+        discountDetails: o.discount_details == null
+            ? null
+            : typeof o.discount_details === 'string'
+                ? JSON.parse(o.discount_details)
+                : o.discount_details,
         voidReason: o.void_reason,
         isWalkIn: !!o.is_walkin,
         items: itemRows
@@ -135,9 +313,98 @@ async function loadOrders(status) {
                 price: Number(i.price_at_purchase),
                 quantity: i.quantity,
                 bundleQuantity: Number(i.bundle_quantity) || 1,
-                addOns: normalizeAddOns(i.add_ons),
+                addOns: normalizeAddOns(i.add_ons).map(addon => {
+                    const price = addon.price ?? addonPrices.get(addon.name);
+                    if (price === undefined) {
+                        throw new Error(`No price is available for stored add-on "${addon.name}".`);
+                    }
+                    return { ...addon, price };
+                }),
             })),
     }));
+}
+
+function receiptText(order) {
+    const amountDue = Math.max(0, order.total - order.vatExemptAmount - order.discountAmount);
+    const columnWidth = 38;
+    const quantityWidth = 4;
+    const priceWidth = 12;
+    const itemWidth = columnWidth - quantityWidth - priceWidth;
+    const formatPrice = amount => `PHP ${Number(amount).toFixed(2)}`.padStart(priceWidth);
+    const formatSummary = (label, amount) =>
+        `${label.padEnd(columnWidth - priceWidth)}${`-PHP ${Number(amount).toFixed(2)}`.padStart(priceWidth)}`;
+    const wrapLabel = label => {
+        const words = label.split(/\s+/);
+        const wrapped = [];
+        let current = '';
+        for (const word of words) {
+            const next = current ? `${current} ${word}` : word;
+            if (current && next.length > itemWidth) {
+                wrapped.push(current);
+                current = word;
+            } else {
+                current = next;
+            }
+        }
+        if (current) wrapped.push(current);
+        return wrapped;
+    };
+    const lines = [
+        'ACKNOWLEDGEMENT RECEIPT',
+        'MANGO ROYAL',
+        '390 Sto.Domingo Street, Mayapa,',
+        'Calamba City, Calamba,',
+        'Philippines, 4027',
+        '',
+        `Order No: ${order.orderId}`,
+        `Date: ${order.timestamp}`,
+        '-'.repeat(columnWidth),
+        `${'QTY'.padEnd(quantityWidth)}${'ITEM'.padEnd(itemWidth)}${'PRICE'.padStart(priceWidth)}`,
+        '-'.repeat(columnWidth),
+    ];
+    for (const item of order.items) {
+        const quantity = String(item.quantity);
+        const label = item.bundleQuantity > 1
+            ? 'Bundle Mango'
+            : `${item.name} (${item.size})`;
+        const wrappedLabel = wrapLabel(label);
+        const addOnTotal = item.addOns.reduce(
+            (sum, addon) => sum + Number(addon.price) * addon.quantity * item.quantity,
+            0
+        );
+        lines.push(
+            `${quantity.padEnd(quantityWidth)}${wrappedLabel[0].padEnd(itemWidth)}${formatPrice(item.price * item.quantity - addOnTotal)}`,
+            ...wrappedLabel.slice(1).map(line => `${''.padEnd(quantityWidth)}${line}`)
+        );
+        for (const addon of item.addOns) {
+            const addonName = `${addon.name}${addon.quantity > 1 ? ` x${addon.quantity}` : ''}`;
+            for (const [index, line] of wrapLabel(addonName).entries()) {
+                lines.push(
+                    `${''.padEnd(quantityWidth)}${line.padEnd(itemWidth)}${index === 0
+                        ? formatPrice(Number(addon.price) * addon.quantity * item.quantity)
+                        : ''.padStart(priceWidth)}`
+                );
+            }
+        }
+    }
+    lines.push(
+        '-'.repeat(columnWidth),
+        ...(order.vatExemptAmount ? [formatSummary('VAT exemption:', order.vatExemptAmount)] : []),
+        ...(order.discountAmount ? [formatSummary(`${order.discountType || 'Discount'} discount (20%):`, order.discountAmount)] : []),
+        ...(order.discountDetails?.scope === 'individual_share'
+            ? [`Eligible share: ${order.discountDetails.cardholderCount} of ${order.discountDetails.totalPeople} people`]
+            : order.discountDetails?.scope === 'selected_items'
+                ? [`Eligible servings: ${order.discountDetails.eligibleItems.reduce((sum, item) => sum + item.servings, 0)}`]
+                : []),
+        `${'TOTAL:'.padStart(columnWidth - priceWidth)}${formatPrice(amountDue)}`,
+        '-'.repeat(columnWidth),
+        '',
+        'THIS IS NOT A SALES INVOICE',
+        'Intended for academic purposes only.',
+        '',
+        ''
+    );
+    return lines.join('\n');
 }
 
 // ---------- ROUTES ----------
@@ -204,12 +471,18 @@ router.post('/orders/:id/verify', async (req, res) => {
         paymentMethod = 'Cash',
         discountType = null,
         discountAmount = 0,
+        vatExemptAmount = 0,
+        discountScope = null,
+        totalPeople = null,
+        cardholderCount = null,
+        eligibleItems = [],
         pwdIdNumber = null,
         seniorName = null,
         seniorBirthdate = null,
     } = req.body || {};
     const parsedPaymentAmount = Number(paymentAmount);
     const parsedDiscountAmount = Number(discountAmount);
+    const parsedVatExemptAmount = Number(vatExemptAmount);
     if (!Number.isInteger(orderId) || orderId <= 0) {
         return res.status(400).json({ error: 'Invalid order ID' });
     }
@@ -219,6 +492,9 @@ router.post('/orders/:id/verify', async (req, res) => {
     if (!Number.isFinite(parsedDiscountAmount) || parsedDiscountAmount < 0) {
         return res.status(400).json({ error: 'A valid discount amount is required' });
     }
+    if (!Number.isFinite(parsedVatExemptAmount) || parsedVatExemptAmount < 0) {
+        return res.status(400).json({ error: 'A valid VAT-exempt amount is required' });
+    }
     if (discountType && !['PWD', 'Senior'].includes(discountType)) {
         return res.status(400).json({ error: 'Invalid discount type' });
     }
@@ -226,6 +502,9 @@ router.post('/orders/:id/verify', async (req, res) => {
     const normalizedSeniorName = typeof seniorName === 'string' ? seniorName.trim() : '';
     if (discountType === 'PWD' && !normalizedPwdId) {
         return res.status(400).json({ error: 'PWD ID number is required' });
+    }
+    if (discountType === 'PWD' && !/^\d{2}-\d{4}-\d{3}-\d{7}$/.test(normalizedPwdId)) {
+        return res.status(400).json({ error: 'Enter the PWD ID in the format RR-PPMM-BBB-NNNNNNN' });
     }
     if (discountType === 'Senior') {
         const dateParts = typeof seniorBirthdate === 'string'
@@ -239,13 +518,22 @@ router.post('/orders/:id/verify', async (req, res) => {
         const validBirthdate = Boolean(birthdate)
             && birthdate.toISOString().slice(0, 10) === seniorBirthdate
             && seniorBirthdate <= today;
+        const age = dateParts
+            ? now.getFullYear() - Number(dateParts[1])
+                - (now.getMonth() + 1 < Number(dateParts[2])
+                    || (now.getMonth() + 1 === Number(dateParts[2]) && now.getDate() < Number(dateParts[3])) ? 1 : 0)
+            : null;
         if (!normalizedSeniorName || !validBirthdate) {
             return res.status(400).json({ error: 'Senior citizen name and valid birthdate are required' });
+        }
+        if (age < 60) {
+            return res.status(400).json({ error: `The senior citizen discount requires the cardholder to be at least 60 years old. Current age: ${age}.` });
         }
     }
     try {
         await metaTableReady;
         await ensureAuditTable();
+        let wasAlreadyVerified = false;
         const connection = await db.getConnection();
         try {
             await connection.beginTransaction();
@@ -255,6 +543,14 @@ router.post('/orders/:id/verify', async (req, res) => {
         }
         let orderTotal;
         let previousStatus;
+        let discountCalculation = {
+            eligibleGross: 0,
+            vatExclusiveAmount: 0,
+            vatExemptAmount: 0,
+            discountAmount: 0,
+            amountDue: 0,
+            details: null,
+        };
         try {
             const [orders] = await connection.query(
                 'SELECT total_price, status FROM orders WHERE order_id = ? FOR UPDATE',
@@ -266,12 +562,35 @@ router.post('/orders/:id/verify', async (req, res) => {
             }
             orderTotal = Number(orders[0].total_price);
             previousStatus = orders[0].status;
-            const expectedDiscount = discountType ? Math.round(orderTotal * 0.20 * 100) / 100 : 0;
-            if (Math.abs(parsedDiscountAmount - expectedDiscount) > 0.01) {
-                await connection.rollback();
-                return res.status(400).json({ error: 'Discount amount does not match the selected discount' });
+            wasAlreadyVerified = previousStatus === STATUS.VERIFIED;
+            discountCalculation.amountDue = orderTotal;
+
+            if (discountType) {
+                const [itemRows] = await connection.query(
+                    `SELECT oi.order_item_id AS id, oi.quantity, oi.price_at_purchase AS price,
+                            p.bundle_quantity AS bundleQuantity
+                     FROM order_items oi
+                     JOIN product_variants pv ON pv.variant_id = oi.variant_id
+                     JOIN products p ON p.product_id = pv.product_id
+                     WHERE oi.order_id = ?
+                     FOR UPDATE`,
+                    [orderId]
+                );
+                discountCalculation = calculateDiscount({
+                    orderTotal,
+                    scope: discountScope,
+                    totalPeople,
+                    cardholderCount,
+                    eligibleItems,
+                    orderItems: itemRows,
+                });
             }
-            if (parsedPaymentAmount + 0.001 < orderTotal - expectedDiscount) {
+            if (Math.abs(parsedDiscountAmount - discountCalculation.discountAmount) > 0.01
+                || Math.abs(parsedVatExemptAmount - discountCalculation.vatExemptAmount) > 0.01) {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Discount or VAT exemption does not match the eligible portion' });
+            }
+            if (parsedPaymentAmount + 0.001 < discountCalculation.amountDue) {
                 await connection.rollback();
                 return res.status(400).json({ error: 'Payment amount is less than the amount due' });
             }
@@ -288,14 +607,16 @@ router.post('/orders/:id/verify', async (req, res) => {
             await connection.query(
                 `INSERT INTO pos_order_meta (
                     order_id, payment_method, payment_amount, discount_type, discount_amount,
-                    pwd_id_number, senior_name, senior_birthdate
+                    vat_exempt_amount, discount_details, pwd_id_number, senior_name, senior_birthdate
                  )
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                      payment_method = VALUES(payment_method),
                      payment_amount = VALUES(payment_amount),
                      discount_type = VALUES(discount_type),
                      discount_amount = VALUES(discount_amount),
+                     vat_exempt_amount = VALUES(vat_exempt_amount),
+                     discount_details = VALUES(discount_details),
                      pwd_id_number = VALUES(pwd_id_number),
                      senior_name = VALUES(senior_name),
                      senior_birthdate = VALUES(senior_birthdate)`,
@@ -305,6 +626,8 @@ router.post('/orders/:id/verify', async (req, res) => {
                     parsedPaymentAmount,
                     discountType,
                     parsedDiscountAmount,
+                    parsedVatExemptAmount,
+                    discountCalculation.details ? JSON.stringify(discountCalculation.details) : null,
                     discountType === 'PWD' ? normalizedPwdId : null,
                     discountType === 'Senior' ? normalizedSeniorName : null,
                     discountType === 'Senior' ? seniorBirthdate : null,
@@ -318,16 +641,53 @@ router.post('/orders/:id/verify', async (req, res) => {
             connection.release();
         }
         bus.emit('order:change', { orderId, status: STATUS.VERIFIED, source: 'pos' });
-        res.json({ success: true });
+        if (wasAlreadyVerified) {
+            return res.json({ success: true, print: { success: true, skipped: true } });
+        }
+        try {
+            const [order] = await loadOrders(STATUS.VERIFIED, orderId);
+            if (!order) throw new Error('Verified order could not be loaded for printing.');
+            const print = await printText(receiptText(order));
+            res.json({ success: true, print });
+        } catch (printError) {
+            console.error(`[pos] order ${orderId} was verified but automatic receipt printing failed:`, printError.message);
+            res.json({ success: true, print: { success: false, error: printError.message } });
+        }
     } catch (err) {
-        res.status(500).json({ error: 'Verify failed', details: err.message });
+        res.status(err.statusCode || 500).json({
+            error: err.statusCode ? err.message : 'Verify failed',
+            ...(err.statusCode ? {} : { details: err.message }),
+        });
+    }
+});
+
+router.post('/orders/:id/print', async (req, res) => {
+    const orderId = Number(req.params.id);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+        return res.status(400).json({ error: 'Invalid order ID' });
+    }
+    try {
+        let [order] = await loadOrders(STATUS.PENDING, orderId);
+        if (!order) [order] = await loadOrders(STATUS.VERIFIED, orderId);
+        if (!order) return res.status(404).json({ error: 'Pending or verified order not found.' });
+        const result = await printText(receiptText(order));
+        res.json({ success: true, print: result });
+    } catch (err) {
+        console.error(`[pos] manual receipt printing failed for order ${orderId}:`, err.message);
+        res.status(502).json({ error: 'Receipt printing failed.', details: err.message });
     }
 });
 
 // POST /api/pos/orders/:id/void — with reason
 router.post('/orders/:id/void', async (req, res) => {
     const orderId = Number(req.params.id);
-    const { reason = '' } = req.body || {};
+    const { reason = '', pendingOnly = false } = req.body || {};
+    if (typeof pendingOnly !== 'boolean') {
+        return res.status(400).json({ error: 'Invalid pending-order requirement.' });
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 255) {
+        return res.status(400).json({ error: 'Enter a void reason under 255 characters.' });
+    }
     try {
         await ensureAuditTable();
         const connection = await db.getConnection();
@@ -346,6 +706,10 @@ router.post('/orders/:id/void', async (req, res) => {
                 await connection.rollback();
                 return res.status(404).json({ error: 'Order not found' });
             }
+            if (pendingOnly && orders[0].status !== STATUS.PENDING) {
+                await connection.rollback();
+                return res.status(409).json({ error: 'This order is no longer pending and cannot be bulk voided.' });
+            }
             await connection.query(`UPDATE orders SET status = ? WHERE order_id = ?`, [STATUS.VOIDED, orderId]);
             if (orders[0].status !== STATUS.VOIDED) {
                 await writeOrderStatusAudit(connection, {
@@ -359,7 +723,7 @@ router.post('/orders/:id/void', async (req, res) => {
             await connection.query(
                 `INSERT INTO pos_order_meta (order_id, void_reason) VALUES (?, ?)
                  ON DUPLICATE KEY UPDATE void_reason = VALUES(void_reason)`,
-                [orderId, reason]
+                [orderId, reason.trim()]
             );
             await connection.commit();
         } catch (err) {
@@ -541,9 +905,9 @@ router.patch('/orders/:id', async (req, res) => {
 });
 
 // POST /api/pos/orders/walkin — create a new walk-in order
-// body: { orderType?, items: [{ variantId, quantity, price }] }
+// body: { items: [{ variantId, quantity, price, addOns? }] }
 router.post('/orders/walkin', async (req, res) => {
-    const { orderType = 'Dine-in', items } = req.body || {};
+    const { items } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'items required' });
     }
@@ -566,14 +930,20 @@ router.post('/orders/walkin', async (req, res) => {
 
             const [ord] = await connection.query(
                 `INSERT INTO orders (session_id, subtotal, total_price, order_type, status)
-                 VALUES (?, ?, ?, ?, ?)`,
-                [sessionId, subtotal, subtotal, orderType, STATUS.PENDING]
+                 VALUES (?, ?, ?, 'Standard', ?)`,
+                [sessionId, subtotal, subtotal, STATUS.PENDING]
             );
             orderId = ord.insertId;
 
-            const values = items.map(i => [orderId, i.variantId, i.quantity, i.price]);
+            const values = items.map(i => [
+                orderId,
+                i.variantId,
+                i.quantity,
+                i.price,
+                JSON.stringify(Array.isArray(i.addOns) ? i.addOns : []),
+            ]);
             await connection.query(
-                `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase) VALUES ?`,
+                `INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase, add_ons) VALUES ?`,
                 [values]
             );
             await connection.query(

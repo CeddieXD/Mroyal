@@ -22,9 +22,11 @@
                 <span class="bell-count" id="bell-count">0</span>
             </div>
             <span id="today" class="today"></span>
+            <button id="sound-toggle" class="btn btn-ghost" type="button" aria-pressed="true">Mute sound</button>
             <button id="refresh-btn" class="btn btn-ghost" title="Refresh">↻</button>
         </div>
     </header>
+    <div id="order-alerts" class="order-alerts" aria-live="polite" aria-atomic="false"></div>
 
     <nav class="tabs">
         <button class="tab active" data-filter="ALL">
@@ -36,8 +38,8 @@
         <button class="tab" data-filter="PREPARING">
             Preparing <span class="badge badge-blue" id="count-PREPARING">0</span>
         </button>
-        <button class="tab" data-filter="READY">
-            Ready <span class="badge badge-green" id="count-READY">0</span>
+        <button class="tab" data-filter="SERVED">
+            Served <span class="badge badge-green" id="count-SERVED">0</span>
         </button>
     </nav>
 
@@ -47,9 +49,6 @@
         <div class="empty-icon">✓</div>
         <p>No orders in this category</p>
     </div>
-
-    <audio id="ding" preload="auto"
-           src="data:audio/wav;base64,UklGRoQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YWAAAAA="></audio>
 
     <script src="js/status-check.js"></script>
     <script>

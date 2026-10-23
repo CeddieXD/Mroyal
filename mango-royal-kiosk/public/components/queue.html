@@ -2,22 +2,33 @@
     <div class="q-card">
         <div class="q-check">✓</div>
         <h1>Order Placed!</h1>
-        <p class="q-sub">Please proceed to the counter to pay and pick up your order.</p>
+        <p class="q-sub">Your order has been sent to the cashier.</p>
 
         <div class="q-number-box">
-            <span class="q-label">Your Queue Number</span>
+            <span class="q-label">Your order number is</span>
             <span class="q-number" id="queue-number">—</span>
         </div>
 
-        <p class="q-instr" id="q-instr">Please pay at the cashier.</p>
+        <p class="q-print-status" id="q-print-status" role="status" aria-live="polite">
+            Sending your order ticket to the printer...
+        </p>
 
-        <div class="q-countdown">
+        <section class="q-digital hidden" id="q-digital" aria-label="Digital order ticket">
+            <div class="q-digital-heading">Digital Print</div>
+            <div class="q-digital-brand">MANGO ROYAL</div>
+            <p class="q-digital-prompt">Your order number is</p>
+            <div class="q-digital-number" id="q-digital-number">—</div>
+            <p class="q-digital-instruction">Please present this number to the cashier.</p>
+            <p class="q-digital-thanks">Thank you!</p>
+        </section>
+
+        <div class="q-countdown hidden" id="q-countdown-wrap">
             Returning to home in <span id="q-countdown">15</span>s
         </div>
 
-        <div style="display:flex;gap:12px;justify-content:center;">
-            <button class="btn btn-primary" id="q-print" style="padding:10px 24px;background:#e67e22;color:white;border-radius:20px;font-weight:700;border:none;cursor:pointer;">🖨 Print Receipt</button>
-            <button class="btn btn-ghost q-done" id="q-done">Done</button>
+        <div class="q-actions">
+            <button class="btn btn-primary hidden" id="q-print" type="button">Retry Print</button>
+            <button class="btn btn-ghost q-done" id="q-done" type="button">Done</button>
         </div>
     </div>
 </div>

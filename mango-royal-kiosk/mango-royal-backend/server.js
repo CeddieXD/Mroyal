@@ -1,10 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 require('dotenv').config();
 const db = require('./config/db'); // Import the separated DB connection
-const { ensureAuditTable, loadOrderItemSnapshots, writeItemAuditLogs } = require('./audit-logs');
+const {
+    ensureAuditTable,
+    loadOrderItemSnapshots,
+    writeItemAuditLogs,
+} = require('./audit-logs');
+const { printText } = require('./printer-client');
 
 const app = express();
 app.use(cors());
@@ -23,6 +29,42 @@ async function verifyDatabaseConnection() {
 
 const MAX_ORDER_QUANTITY = 20;
 const MAX_ADDON_QUANTITY = 10;
+const KIOSK_PRINT_TOKEN_TTL_MS = 10 * 60 * 1000;
+const kioskPrintSecret = crypto.randomBytes(32);
+
+function createKioskPrintToken(orderId) {
+    const expiresAt = Date.now() + KIOSK_PRINT_TOKEN_TTL_MS;
+    const signature = crypto.createHmac('sha256', kioskPrintSecret)
+        .update(`${orderId}:${expiresAt}`)
+        .digest('hex');
+    return `${expiresAt}.${signature}`;
+}
+
+function isValidKioskPrintToken(orderId, token) {
+    if (typeof token !== 'string') return false;
+    const match = /^(\d{13})\.([a-f0-9]{64})$/.exec(token);
+    if (!match) return false;
+    const expiresAt = Number(match[1]);
+    if (expiresAt < Date.now() || expiresAt > Date.now() + KIOSK_PRINT_TOKEN_TTL_MS) return false;
+    const expected = crypto.createHmac('sha256', kioskPrintSecret)
+        .update(`${orderId}:${expiresAt}`)
+        .digest();
+    const received = Buffer.from(match[2], 'hex');
+    return received.length === expected.length && crypto.timingSafeEqual(received, expected);
+}
+
+function formatKioskAcknowledgement(queueNumber) {
+    const lines = [
+        'MANGO ROYAL',
+        'Your order number is',
+        queueNumber,
+        '',
+        'Please present this number',
+        'to the cashier.',
+        'Thank you!',
+    ];
+    return { queueNumber, text: lines.join('\n') };
+}
 
 let orderItemAddonsReady;
 const ensureOrderItemAddonsColumn = () => {
@@ -39,8 +81,34 @@ const ensureOrderItemAddonsColumn = () => {
     return orderItemAddonsReady;
 };
 
+let standardOrderStorageReady;
+const ensureStandardOrderStorage = () => {
+    if (!standardOrderStorageReady) {
+        standardOrderStorageReady = db.query("SHOW COLUMNS FROM orders LIKE 'order_type'")
+            .then(async ([columns]) => {
+                if (!columns.length) return;
+                const column = columns[0];
+                if (!String(column.Type).toLowerCase().startsWith('varchar')
+                    || column.Default !== 'Standard') {
+                    await db.query(
+                        "ALTER TABLE orders MODIFY COLUMN order_type VARCHAR(20) NOT NULL DEFAULT 'Standard'"
+                    );
+                }
+                await db.query("UPDATE orders SET order_type = 'Standard' WHERE order_type <> 'Standard'");
+                await db.query("UPDATE orders SET status = 'SERVED' WHERE status = 'READY'");
+            })
+            .catch(err => {
+                standardOrderStorageReady = null;
+                console.error('Failed to normalize legacy order storage values:', err);
+                throw err;
+            });
+    }
+    return standardOrderStorageReady;
+};
+
 app.use((_req, _res, next) => {
-    ensureOrderItemAddonsColumn().then(() => next(), next);
+    Promise.all([ensureOrderItemAddonsColumn(), ensureStandardOrderStorage()])
+        .then(() => next(), next);
 });
 
 const { router: authRouter, requireRole } = require('./auth/auth.routes');
@@ -54,7 +122,11 @@ app.use('/api/admin', requireRole('admin'), require('./admin/admin.routes'));
 const posBus = require('./pos/events');
 
 // Serve kiosk product images to the POS frontend
-app.use('/images', express.static(path.join(__dirname, '..', 'public', 'assets', 'img')));
+app.use('/images', express.static(path.join(__dirname, '..', 'public', 'assets', 'img'), {
+    setHeaders: res => {
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    },
+}));
 
 // --- ROUTES ---
 
@@ -99,9 +171,33 @@ app.post('/api/sessions', async (req, res) => {
     }
 });
 
+app.post('/api/kiosk/orders/:id/acknowledgement-print', async (req, res) => {
+    const orderId = Number(req.params.id);
+    if (!Number.isInteger(orderId) || orderId <= 0 ||
+        !isValidKioskPrintToken(orderId, req.body?.printToken)) {
+        return res.status(403).json({ error: 'Invalid or expired kiosk print permission.' });
+    }
+    try {
+        const [orders] = await db.query(
+            'SELECT order_id, status, created_at FROM orders WHERE order_id = ?',
+            [orderId]
+        );
+        if (!orders.length || orders[0].status !== 'PENDING') {
+            return res.status(404).json({ error: 'Pending kiosk order not found.' });
+        }
+        const queueNumber = 'A' + String(orderId).padStart(3, '0').slice(-3);
+        const ticket = formatKioskAcknowledgement(queueNumber);
+        await printText(ticket.text);
+        res.json({ success: true });
+    } catch (err) {
+        console.error(`[kiosk] acknowledgement printing failed for order ${orderId}:`, err.message);
+        res.status(502).json({ error: 'Kiosk receipt printing failed.', details: err.message });
+    }
+});
+
 // Submit Final Order
 app.post('/api/orders', async (req, res) => {
-    const { session_id, order_type, items } = req.body || {};
+    const { session_id, items } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'Order must contain at least one item.' });
     }
@@ -140,7 +236,7 @@ app.post('/api/orders', async (req, res) => {
             if (totalAddonQuantity > MAX_ADDON_QUANTITY) {
                 return res.status(400).json({ error: `Each shake is limited to ${MAX_ADDON_QUANTITY} toppings.` });
             }
-            addOns.push({ name, quantity: addonQuantity });
+            addOns.push({ name, quantity: addonQuantity, price: addonPrices.get(name) });
         }
 
         orderItems.push({
@@ -199,7 +295,7 @@ app.post('/api/orders', async (req, res) => {
 
         const [orderResult] = await connection.query(
             "INSERT INTO Orders (session_id, subtotal, total_price, order_type) VALUES (?, ?, ?, ?)",
-            [sessionId, subtotal, subtotal, order_type]
+            [sessionId, subtotal, subtotal, 'Standard']
         );
         orderId = orderResult.insertId;
 
@@ -244,13 +340,20 @@ app.post('/api/orders', async (req, res) => {
     }
 
     const queueNumber = 'A' + String(orderId).padStart(3, '0').slice(-3);
+    const acknowledgement = formatKioskAcknowledgement(queueNumber);
     try {
         posBus.emit('order:new', { orderId, source: 'kiosk' });
     } catch (err) {
         console.error(`Order ${orderId} was saved, but POS notification failed:`, err);
     }
 
-    res.json({ success: true, order_id: orderId, queue_number: queueNumber });
+    res.json({
+        success: true,
+        order_id: orderId,
+        queue_number: queueNumber,
+        acknowledgement,
+        acknowledgement_print_token: createKioskPrintToken(orderId),
+    });
 });
 
 const PORT = process.env.PORT || 3000;

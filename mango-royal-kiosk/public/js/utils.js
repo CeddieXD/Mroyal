@@ -3,17 +3,35 @@
 const cache = new Map();
 
 function preload(url) {
-    if (cache.has(url)) return;
+    if (cache.has(url)) return cache.get(url);
     const img = new Image();
+    img.decoding = 'async';
+    img.fetchPriority = 'low';
+    const loaded = new Promise(resolve => {
+        img.onload = () => {
+            if (typeof img.decode === 'function') {
+                img.decode().catch(error => {
+                    console.warn(`Could not decode preloaded image "${url}":`, error);
+                }).finally(resolve);
+            } else {
+                resolve();
+            }
+        };
+        img.onerror = () => {
+            console.warn(`Could not preload image "${url}".`);
+            resolve();
+        };
+    });
+    cache.set(url, loaded);
     img.src = url;
-    cache.set(url, img);
+    return loaded;
 }
 
 export function preloadProductImages(products) {
-    products.forEach(product => {
+    return Promise.all((Array.isArray(products) ? products : []).map(product => {
         const imageName = product.image_url || product.img;
-        if (imageName) preload(`assets/img/${imageName}`);
-    });
+        return imageName ? preload(`assets/img/${imageName}`) : Promise.resolve();
+    }));
 }
 
 export function preloadIntroFrames(totalFrames = 37) {

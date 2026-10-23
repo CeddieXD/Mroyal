@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { promisify } = require('util');
 const { readAdminSettings } = require('../config/admin-settings');
+const { writeStaffActivity } = require('../staff-activity');
 
 const router = express.Router();
 const scrypt = promisify(crypto.scrypt);
@@ -125,6 +126,20 @@ router.post('/login', async (req, res) => {
             settings.security.sessionTimeoutMinutes * 60 * 1000
         ),
     };
+    const roleLabel = { admin: 'Admin Dashboard', pos: 'POS', kitchen: 'Kitchen Display' }[user.role];
+    try {
+        await writeStaffActivity({
+            username: user.username,
+            displayName: user.displayName,
+            role: user.role,
+            action: 'Signed in',
+            details: `${user.displayName} signed in to ${roleLabel}.`,
+            category: 'Users',
+        });
+    } catch (error) {
+        console.error('[auth] successful login could not be recorded:', error.message);
+        return res.status(503).json({ error: 'Login could not be completed because activity logging is unavailable.' });
+    }
     sessions.set(token, session);
     res.json({ token, user: { username: user.username, displayName: user.displayName, role: user.role }, expiresAt: session.expiresAt });
 });
@@ -138,10 +153,33 @@ router.get('/me', (req, res) => {
     });
 });
 
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
     const header = req.get('authorization') || '';
     const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(header);
-    if (match) sessions.delete(match[1]);
+    if (match) {
+        const session = getSession(req);
+        let loggingError;
+        if (session) {
+            const roleLabel = { admin: 'Admin Dashboard', pos: 'POS', kitchen: 'Kitchen Display' }[session.role];
+            try {
+                await writeStaffActivity({
+                    username: session.username,
+                    displayName: session.displayName,
+                    role: session.role,
+                    action: 'Signed out',
+                    details: `${session.displayName} signed out from ${roleLabel}.`,
+                    category: 'Users',
+                });
+            } catch (error) {
+                loggingError = error;
+                console.error('[auth] sign-out could not be recorded:', error.message);
+            }
+        }
+        sessions.delete(match[1]);
+        if (loggingError) {
+            return res.status(503).json({ error: 'Session ended, but the sign-out activity could not be recorded.' });
+        }
+    }
     res.json({ success: true });
 });
 

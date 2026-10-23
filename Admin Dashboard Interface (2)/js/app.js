@@ -17,6 +17,7 @@ const DEFAULT_ADMIN_SETTINGS = {
         hourlySalesTrend: false
     },
     security: { sessionTimeoutMinutes: 480 },
+    posFeatures: { endOfDayReceiptEnabled: false },
     appearance: { theme: 'light', accentColor: '#f97316' }
 };
 const ACCENT_COLORS = {
@@ -42,14 +43,14 @@ let overviewData = {
     inProgressOrders: 0,
     completedOrders: 0,
     voidedOrders: 0,
-    dineInOrders: 0,
-    takeOutOrders: 0,
+    intervalSummary: null,
     topProducts: [],
     hourly: []
 };
 
 let recentTransactions = [];
 let menuItems = [];
+const preloadedMenuImages = new Set();
 let salesInterval = getStoredAdminInterval();
 let overviewRequestId = 0;
 let adminSettings = structuredClone(DEFAULT_ADMIN_SETTINGS);
@@ -76,18 +77,10 @@ let showArchivedUsers = false;
 
 const ACTIVITY_LOG_STORAGE_KEY = 'mango-royal-admin-activity';
 const MENU_ARCHIVE_STORAGE_KEY = 'mango-royal-menu-archive';
-const activityLogSeed = [
-    { id: 1, timestamp: new Date(Date.now() - 1000 * 60 * 27), user: 'Admin User', action: 'Updated menu item', details: 'Mango Royal price changed from ₱59 to ₱65.', category: 'Menu' },
-    { id: 2, timestamp: new Date(Date.now() - 1000 * 60 * 64), user: 'Admin User', action: 'Toggled item availability', details: 'Fresh Juice set to unavailable for online ordering.', category: 'Menu' },
-    { id: 3, timestamp: new Date(Date.now() - 1000 * 60 * 132), user: 'System', action: 'Report generated', details: 'Daily sales report exported to CSV.', category: 'Reports' },
-    { id: 4, timestamp: new Date(Date.now() - 1000 * 60 * 190), user: 'Admin User', action: 'Updated settings', details: 'Report frequency changed to Daily.', category: 'System' },
-    { id: 5, timestamp: new Date(Date.now() - 1000 * 60 * 340), user: 'Admin User', action: 'Updated user role', details: 'Carlos Reyes assigned to Cashier access.', category: 'Users' },
-    { id: 6, timestamp: new Date(Date.now() - 1000 * 60 * 520), user: 'System', action: 'Order status changed', details: 'Order A771 moved to Completed.', category: 'Transactions' }
-];
-let activityLogs = activityLogSeed.map(log => ({ ...log, timestamp: new Date(log.timestamp) }));
+let activityLogs = [];
 try {
     const savedLogs = JSON.parse(localStorage.getItem(ACTIVITY_LOG_STORAGE_KEY) || '[]');
-    if (Array.isArray(savedLogs) && savedLogs.length) {
+    if (Array.isArray(savedLogs)) {
         activityLogs = savedLogs.map(log => ({ ...log, timestamp: new Date(log.timestamp) }));
     }
 } catch (e) {
@@ -112,6 +105,24 @@ function recordActivity({ user = 'Admin User', action, details, category = 'Syst
     if (document.getElementById('view-activity')?.classList.contains('active')) {
         renderActivityLog();
     }
+    fetch(`${API_BASE}/api/admin/activity-logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, details, category })
+    }).then(async response => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        const index = activityLogs.findIndex(log => log.id === entry.id);
+        if (index !== -1) {
+            activityLogs[index] = { ...result, timestamp: new Date(result.timestamp) };
+            try {
+                localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLogs.slice(0, 200)));
+            } catch (storageError) {
+                console.warn('Could not update the local activity cache:', storageError);
+            }
+            if (document.getElementById('view-activity')?.classList.contains('active')) renderActivityLog();
+        }
+    }).catch(error => console.error('Could not record activity on the server:', error));
 }
 window.MangoRoyalAdminAudit = { currentUserName: '', recordActivity };
 
@@ -216,6 +227,11 @@ if (txIntervalDropdown) {
         renderTransactions();
     });
 }
+$('#report-range')?.addEventListener('change', event => {
+    salesInterval = event.target.value;
+    persistAdminInterval();
+    loadOverviewData();
+});
 $$('.nav-item[data-view]').forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
@@ -266,6 +282,25 @@ function normalizeMenuArchiveState(items) {
     }
 }
 
+function preloadMenuImages(items) {
+    items.forEach(item => {
+        if (!item.image) return;
+        const src = item.image.startsWith('http')
+            ? item.image
+            : `${API_BASE}/images/${encodeURIComponent(item.image.replace(/^\/?images\//, ''))}`;
+        if (preloadedMenuImages.has(src)) return;
+        preloadedMenuImages.add(src);
+        const image = new Image();
+        image.decoding = 'async';
+        image.fetchPriority = 'low';
+        image.onerror = () => {
+            console.warn(`Could not preload menu image for "${item.name}": ${src}`);
+            preloadedMenuImages.delete(src);
+        };
+        image.src = src;
+    });
+}
+
 function persistMenuArchiveState() {
     try {
         const archiveState = {};
@@ -301,7 +336,7 @@ function switchView(view) {
         if (!adminSettingsLoaded) loadAdminSettings();
         renderReports();
     }
-    if (activeView === 'activity') renderActivityLog();
+    if (activeView === 'activity') void loadActivityLog();
     if (activeView === 'settings') loadAdminSettings();
     if (activeView === 'users') renderUsers();
 }
@@ -317,13 +352,20 @@ async function loadOverviewData() {
             const data = await res.json();
             const operationalFields = [
                 'averageOrderValue', 'inProgressOrders', 'completedOrders',
-                'voidedOrders', 'dineInOrders', 'takeOutOrders'
+                'voidedOrders'
             ];
             operationalMetricsAvailable = operationalFields.every(key => Number.isFinite(Number(data[key])));
             if (!operationalMetricsAvailable) {
                 console.warn('Operations analytics are missing from the overview API. Restart the backend to load the latest metrics.');
             }
-            overviewData = { ...overviewData, ...data };
+            overviewData = {
+                ...overviewData,
+                ...data,
+                intervalSummary: data.salesInterval === requestedInterval ? data.intervalSummary || null : null,
+                topProducts: data.salesInterval === requestedInterval && Array.isArray(data.topProducts) ? data.topProducts : [],
+                paymentMethods: data.salesInterval === requestedInterval && Array.isArray(data.paymentMethods) ? data.paymentMethods : [],
+                salesTimeline: data.salesInterval === requestedInterval && Array.isArray(data.salesTimeline) ? data.salesTimeline : [],
+            };
         } else {
             console.warn(`Backend overview fetch failed (HTTP ${res.status}).`);
             salesInterval = overviewData.salesInterval || salesInterval;
@@ -377,6 +419,7 @@ async function loadMenuData() {
             const data = await res.json();
             if (Array.isArray(data) && data.length > 0) {
                 menuItems = normalizeMenuArchiveState(data);
+                preloadMenuImages(menuItems);
             }
         }
     } catch (e) {
@@ -396,6 +439,10 @@ function mergeAdminSettings(settings) {
         security: {
             ...DEFAULT_ADMIN_SETTINGS.security,
             ...(settings.security || {})
+        },
+        posFeatures: {
+            ...DEFAULT_ADMIN_SETTINGS.posFeatures,
+            ...(settings.posFeatures || {})
         },
         appearance: {
             ...DEFAULT_ADMIN_SETTINGS.appearance,
@@ -432,6 +479,7 @@ function populateSettingsForm(settings) {
     $('#setting-report-format').value = settings.defaultFormat;
     $('#setting-report-recipients').value = settings.recipients;
     $('#setting-session-timeout').value = settings.security.sessionTimeoutMinutes;
+    $('#setting-eod-receipt').checked = settings.posFeatures.endOfDayReceiptEnabled;
     $('#setting-theme').value = settings.appearance.theme;
     $$('[data-report-section]').forEach(input => {
         input.checked = settings.reportSections[input.dataset.reportSection];
@@ -480,6 +528,9 @@ function readSettingsForm() {
         ])),
         security: {
             sessionTimeoutMinutes: Number($('#setting-session-timeout').value)
+        },
+        posFeatures: {
+            endOfDayReceiptEnabled: $('#setting-eod-receipt').checked
         },
         appearance: {
             theme: $('#setting-theme').value,
@@ -1164,6 +1215,21 @@ function renderTransactions() {
                 ? t.timeServed.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:true })
                 : 'Not recorded';
             const discountAmount = t.discount ? Number(t.discount.amount || 0) : 0;
+            const vatExemptAmount = t.discount ? Number(t.discount.vatExemptAmount || 0) : 0;
+            const discountDetails = t.discount?.details;
+            const eligibleGross = Number(discountDetails?.eligibleGross || 0);
+            const vatExclusiveEligible = Number(discountDetails?.vatExclusiveAmount || 0);
+            const discountBasis = discountDetails?.scope === 'individual_share'
+                ? `Individual share: ${Number(discountDetails.cardholderCount)} of ${Number(discountDetails.totalPeople)} people`
+                : discountDetails?.scope === 'selected_items'
+                    ? `Selected for ${Number(discountDetails.cardholderCount)} cardholder(s): ${(Array.isArray(discountDetails.eligibleItems)
+                        ? discountDetails.eligibleItems.map(eligible => {
+                            const item = orderItems.find(orderItem => Number(orderItem.order_item_id) === Number(eligible.orderItemId));
+                            const itemName = item ? `${item.name}${item.size_name ? ` (${item.size_name})` : ''}` : 'Order item';
+                            return `${itemName} ×${Number(eligible.servings)} serving(s)`;
+                        })
+                        : []).join(', ')}`
+                    : '';
             const itemRows = orderItems.map(item => {
                 const name = escapeHtml(item.name || 'Menu item');
                 const size = escapeHtml(item.size_name || '');
@@ -1224,8 +1290,13 @@ function renderTransactions() {
                             ${removedItemActivity ? `<section class="removed-audit-section" aria-label="Removed item history"><div class="order-section-head"><h4>Removed item history</h4></div>${removedItemActivity}</section>` : ''}
                             <div class="order-totals">
                                 <div><span>Subtotal</span><b>${peso2(t.subtotal ?? t.total)}</b></div>
+                                ${t.discount && discountDetails ? `<div><span>Eligible gross portion</span><b>${peso2(eligibleGross)}</b></div>` : ''}
+                                ${t.discount && discountDetails ? `<div><span>VAT-exclusive eligible portion</span><b>${peso2(vatExclusiveEligible)}</b></div>` : ''}
                                 ${t.discount ? `<div class="order-discount"><span>${escapeHtml(t.discount.type)} discount</span><b>−${peso2(discountAmount)}</b></div>` : ''}
-                                <div class="order-grand-total"><span>Order total</span><b>${peso2(t.total)}</b></div>
+                                ${t.discount && vatExemptAmount ? `<div class="order-discount"><span>VAT exemption</span><b>−${peso2(vatExemptAmount)}</b></div>` : ''}
+                                ${discountBasis ? `<div class="order-discount"><span>${escapeHtml(discountBasis)}</span></div>` : ''}
+                                <div class="order-grand-total"><span>Amount due</span><b>${peso2(Math.max(0, Number(t.total) - discountAmount - vatExemptAmount))}</b></div>
+                                ${t.paymentAmount != null ? `<div><span>Payment received</span><b>${peso2(t.paymentAmount)}</b></div>` : ''}
                                 <div><span>Change</span><b>${peso2(t.amountChange || 0)}</b></div>
                             </div>
                         </section>
@@ -1234,7 +1305,6 @@ function renderTransactions() {
                             <dl class="order-info-list">
                                 <div><dt>Payment method</dt><dd>${escapeHtml(t.paymentMethod || 'Not recorded')}</dd></div>
                                 <div><dt>Order source</dt><dd>${escapeHtml(t.cashierId || 'Not recorded')}</dd></div>
-                                <div><dt>Order type</dt><dd>${escapeHtml(t.orderType || 'Not recorded')}</dd></div>
                                 <div><dt>Last updated</dt><dd>${escapeHtml(servedTime)}</dd></div>
                                 ${t.voidReason ? `<div class="order-void-reason"><dt>Void reason</dt><dd>${escapeHtml(t.voidReason.type)}</dd></div>` : ''}
                             </dl>
@@ -1258,7 +1328,7 @@ function renderTransactions() {
     }));
 }
 
-function buildPrintableTransactionsHtml(list) {
+function buildTransactionsPreviewHtml(list, generatedAt, filterSummary) {
     const rows = list.map(t => `
         <tr>
             <td>${escapeHtml(t.id)}</td>
@@ -1272,43 +1342,110 @@ function buildPrintableTransactionsHtml(list) {
         </tr>
     `).join('');
 
-    return `<!doctype html><html><head><title>Mango Royal Transactions Export</title>
-        <style>body{font:14px Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}table{border-collapse:collapse;width:100%;margin-top:18px}td,th{border:1px solid #d1d5db;padding:8px;text-align:left}th{background:#f3f4f6}@media print{button{display:none}}</style>
-        </head><body><h1>Transaction Export</h1><p>Generated ${escapeHtml(new Date().toLocaleString())}</p>
-        <table><thead><tr><th>Order ID</th><th>Date &amp; Time</th><th>Cashier</th><th>Items</th><th>Total</th><th>Change</th><th>Status</th><th>Payment</th></tr></thead><tbody>${rows}</tbody></table><button onclick="window.print()">Print / Save as PDF</button></body></html>`;
+    const totalSales = list.reduce((sum, transaction) => sum + Number(transaction.total || 0), 0);
+    const averageOrder = list.length ? totalSales / list.length : 0;
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Mango Royal Transaction Report</title>
+        <style>
+        :root{font-family:Inter,"Segoe UI",Arial,sans-serif;color:#172033;background:#f1f5f9}
+        *{box-sizing:border-box}body{margin:0;padding:32px 20px}.report{max-width:1200px;margin:0 auto;background:#fff;padding:40px;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 14px 40px #0f172a12}
+        .masthead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:24px;border-bottom:2px solid #f97316}
+        h1{margin:0;font-size:26px;letter-spacing:-.03em}.subtitle{margin:8px 0 0;color:#64748b}.meta{text-align:right;color:#64748b;font-size:13px;line-height:1.7}
+        section{margin-top:28px}h2{font-size:18px;margin:0 0 14px}.summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+        .metric{padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:linear-gradient(145deg,#fff,#fff7ed)}.metric span{display:block;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metric strong{display:block;margin-top:8px;font-size:24px}
+        .table-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:12px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:9px 10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}th{background:#fff7ed;color:#9a3412;font-size:10px;text-transform:uppercase;letter-spacing:.05em}tbody tr:last-child td{border-bottom:0}
+        .footer{margin-top:30px;padding-top:16px;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px}
+        @media(max-width:640px){body{padding:0}.report{padding:22px 16px;border-radius:0}.masthead{display:block}.meta{text-align:left;margin-top:14px}.summary{grid-template-columns:1fr}}
+        @page{size:A4 landscape;margin:10mm}
+        @media print{:root{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{padding:0;background:#fff}.report{max-width:none;border:0;border-radius:0;box-shadow:none;padding:0}.table-wrap{overflow:visible}thead{display:table-header-group}tr{break-inside:avoid}}
+        </style></head><body><main class="report">
+        <header class="masthead"><div><h1>Mango Royal Transaction Report</h1><p class="subtitle">${escapeHtml(filterSummary)}</p></div>
+        <div class="meta"><div><strong>Transactions</strong>: ${list.length.toLocaleString('en-US')}</div><div><strong>Generated</strong>: ${escapeHtml(generatedAt)}</div></div></header>
+        <section><h2>Transaction Summary</h2><div class="summary">
+            <div class="metric"><span>Transactions</span><strong>${list.length.toLocaleString('en-US')}</strong></div>
+            <div class="metric"><span>Total Amount</span><strong>${escapeHtml(peso(totalSales))}</strong></div>
+            <div class="metric"><span>Average Order</span><strong>${escapeHtml(peso(averageOrder))}</strong></div>
+        </div></section>
+        <section><h2>Transaction Details</h2><div class="table-wrap"><table><thead><tr><th>Order ID</th><th>Date &amp; Time</th><th>Cashier</th><th>Items</th><th>Total</th><th>Change</th><th>Status</th><th>Payment</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+        <footer class="footer">Mango Royal · Transaction Report · Generated ${escapeHtml(generatedAt)}</footer>
+        </main></body></html>`;
 }
 
 function runTransactionsExport(mode = 'digital') {
     const list = filterTransactions();
     if (!list.length) return alert('No transactions to export.');
 
-    const exportLabel = mode === 'digital' ? 'Digital Export' : mode === 'print' ? 'Print' : 'Digital + Print Export';
+    const generatedAt = new Date().toLocaleString();
+    const selectedLabel = selector => {
+        const element = document.querySelector(selector);
+        return element?.selectedOptions?.[0]?.textContent.trim() || 'All';
+    };
+    const filters = [
+        `Time: ${selectedLabel('#tx-time')}`,
+        `Status: ${selectedLabel('#tx-status')}`,
+        `Payment: ${selectedLabel('#tx-payment')}`,
+        `Day: ${selectedLabel('#tx-day')}`
+    ];
+    const search = $('#tx-search')?.value.trim();
+    if (search) filters.push(`Search: ${search}`);
+    const filterSummary = `Filters — ${filters.join(' · ')}`;
+    const csvRows = [
+        ['Order ID', 'Date', 'Cashier', 'Items', 'Total', 'Change', 'Status', 'Payment Method'],
+        ...list.map(t => [
+            t.id,
+            new Date(t.date).toISOString(),
+            t.cashierId || 'Unknown',
+            (t.items || []).join('; '),
+            Number(t.total || 0),
+            Number(t.amountChange || 0),
+            t.status || 'Completed',
+            t.paymentMethod || 'Cash'
+        ])
+    ];
+    const csv = csvRows.map(row => row.map(value => {
+        const text = String(value ?? '');
+        const safeText = typeof value === 'string' && /^[\t\r ]*[=+\-@]/.test(text) ? `'${text}` : text;
+        return `"${safeText.replace(/"/g, '""')}"`;
+    }).join(',')).join('\r\n');
+    const activityAction = mode === 'digital' ? 'Downloaded transaction CSV'
+        : mode === 'json' ? 'Downloaded transaction JSON'
+            : mode === 'preview' ? 'Previewed transactions'
+                : mode === 'digital-print' ? 'Exported transactions'
+                    : 'Opened transaction print preview';
+    const activityDetails = mode === 'digital-print'
+        ? 'Transaction CSV was downloaded and its print preview was opened.'
+        : `${list.length} filtered transaction(s) ${mode === 'print' ? 'were opened in print preview' : mode === 'preview' ? 'were previewed' : 'were downloaded'}.`;
     recordActivity({
         user: 'Admin User',
-        action: 'Exported transactions',
-        details: `Transaction list exported via ${exportLabel}.`,
+        action: activityAction,
+        details: activityDetails,
         category: 'Transactions'
     });
 
     if (mode === 'digital' || mode === 'digital-print') {
-        let csv = 'Order ID,Date,Cashier,Items,Total,Change,Status,Payment Method\n';
-        list.forEach(t => {
-            csv += `"${t.id}","${new Date(t.date).toISOString()}","${t.cashierId}","${(t.items || []).join('; ')}",${t.total},${t.amountChange||0},"${t.status}","${t.paymentMethod}"\n`;
-        });
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `transactions_${Date.now()}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
+        downloadReport(csv, 'text/csv;charset=utf-8', 'csv');
     }
-
-    if (mode === 'print' || mode === 'digital-print') {
-        const w = window.open('', '_blank', 'width=1000,height=700');
-        if (!w) return alert('Popups blocked. Please allow popups to print or save the transaction export.');
-        w.document.write(buildPrintableTransactionsHtml(list));
-        w.document.close();
+    if (mode === 'json') {
+        downloadReport(JSON.stringify({
+            title: 'Mango Royal Transaction Report',
+            generatedAt: new Date().toISOString(),
+            transactions: list.map(t => ({ ...t, date: new Date(t.date).toISOString() }))
+        }, null, 2), 'application/json', 'json');
+    }
+    if (mode === 'preview' || mode === 'print' || mode === 'digital-print') {
+        const report = {
+            generatedAt,
+            intervalLabel: `${list.length.toLocaleString('en-US')} filtered transactions`
+        };
+        openReportPreview(report, {
+            title: 'Transaction Report Preview',
+            html: buildTransactionsPreviewHtml(list, generatedAt, filterSummary),
+            frameTitle: 'Transaction report preview',
+            printLabel: 'Print Transactions',
+            category: 'Transactions',
+            action: 'Printed transaction report',
+            activityDetails: `Transaction report for ${list.length} filtered transaction(s) was opened in the browser print dialog.`
+        });
     }
 }
 
@@ -1322,9 +1459,11 @@ if (exportTxButton) {
     const exportMenu = document.createElement('div');
     exportMenu.className = 'report-export-menu';
     exportMenu.innerHTML = `
-        <button type="button" class="report-export-option is-primary" data-tx-export-mode="digital">Digital Export</button>
-        <button type="button" class="report-export-option" data-tx-export-mode="print">Print</button>
-        <button type="button" class="report-export-option is-danger" data-tx-export-mode="digital-print">Digital + Print Export</button>
+        <button type="button" class="report-export-option is-primary" data-tx-export-mode="preview">Preview Transactions</button>
+        <button type="button" class="report-export-option" data-tx-export-mode="print">Print Transactions</button>
+        <button type="button" class="report-export-option" data-tx-export-mode="digital">Download CSV</button>
+        <button type="button" class="report-export-option" data-tx-export-mode="json">Download JSON</button>
+        <button type="button" class="report-export-option" data-tx-export-mode="digital-print">Download CSV + Preview</button>
     `;
     exportWrap.appendChild(exportMenu);
 
@@ -1373,6 +1512,17 @@ function getMenuState(item) {
     return item?.available ? { label: 'Available', className: 'is-available' } : { label: 'Unavailable', className: 'is-unavailable' };
 }
 
+function getMenuItemSizes(item) {
+    if (Array.isArray(item?.sizes)) {
+        return item.sizes
+            .filter(size => size?.size && Number.isFinite(Number(size.price)))
+            .map(size => ({ ...size, size: String(size.size), price: Number(size.price) }));
+    }
+    return Object.entries(item?.price || {})
+        .filter(([, price]) => Number.isFinite(Number(price)))
+        .map(([size, price]) => ({ size, price: Number(price) }));
+}
+
 function renderMenu() {
     const chips = ['all','BEST_SELLERS','PREMIUM','BASIC','SEASONAL'];
     const visibleItems = menuItems.filter(i => menuShowArchived ? isMenuArchived(i) : !isMenuArchived(i));
@@ -1394,7 +1544,7 @@ function renderMenu() {
             if (icon) icon.textContent = '←';
             if (text) text.textContent = 'Back';
         } else {
-            if (icon) icon.textContent = 'A';
+            if (icon) icon.innerHTML = '<span class="archive-icon-shape"></span>';
             if (text) text.textContent = 'Archived';
         }
     }
@@ -1414,10 +1564,11 @@ function renderMenu() {
     $('#menu-grid').innerHTML = list.map(i => {
         const imgSrc = i.image ? (i.image.startsWith('http') ? i.image : `${API_BASE}/images/${i.image}`) : 'MangoRoyal.png';
         const status = getMenuState(i);
+        const sizes = getMenuItemSizes(i);
         return `
         <article class="menu-card ${i.available ? '' : 'unavailable'} ${isMenuArchived(i) ? 'is-archived' : ''}">
             <div class="menu-card-image">
-                <img src="${escapeHtml(imgSrc)}" alt="${escapeHtml(i.name)}" loading="lazy" onerror="this.onerror=null;this.src='MangoRoyal.png';">
+                <img src="${escapeHtml(imgSrc)}" alt="${escapeHtml(i.name)}" decoding="async" fetchpriority="low" onerror="this.onerror=null;this.src='MangoRoyal.png';">
                 <span class="menu-availability ${status.className}">
                     <span class="availability-dot" aria-hidden="true"></span>${status.label}
                 </span>
@@ -1427,8 +1578,7 @@ function renderMenu() {
                 <h3 class="menu-name">${escapeHtml(i.name)}</h3>
                 <p class="menu-desc">${escapeHtml(i.description || 'No description provided.')}</p>
                 <div class="menu-price">
-                    <span><span class="price-size">Tall</span><b>${peso(i.price?.tall || 0)}</b></span>
-                    <span><span class="price-size">Grande</span><b>${peso(i.price?.grande || 0)}</b></span>
+                    ${sizes.map(size => `<span><span class="price-size">${escapeHtml(size.size)}</span><b>${peso(size.price)}</b></span>`).join('')}
                 </div>
             </div>
             <div class="menu-actions">
@@ -1437,7 +1587,7 @@ function renderMenu() {
                 </button>
                 <button class="menu-action-edit" data-edit="${escapeHtml(i.id)}" aria-label="Edit ${escapeHtml(i.name)}">Edit</button>
                 <button class="menu-action-delete ${isMenuArchived(i) ? 'is-archived' : ''}" data-archive="${escapeHtml(i.id)}" aria-label="Archive ${escapeHtml(i.name)}" title="${isMenuArchived(i) ? 'Archived item' : 'Archive item'}">
-                    <span class="archive-mark" aria-hidden="true">A</span>
+                    <span class="archive-mark" aria-hidden="true"><span class="archive-icon-shape"></span></span>
                     <span class="archive-loading" aria-hidden="true"></span>
                 </button>
             </div>
@@ -1480,7 +1630,7 @@ function renderMenu() {
 
         openModal('Archive Item', `
             <div class="archive-confirmation">
-                <div class="archive-confirmation-icon" aria-hidden="true">A</div>
+                <div class="archive-confirmation-icon" aria-hidden="true"><span class="archive-icon-shape"></span></div>
                 <div class="archive-confirmation-copy">
                     <h4>Archive "${escapeHtml(it.name)}"?</h4>
                     <p>This will keep it in the catalog but remove it from active sales.</p>
@@ -1531,7 +1681,10 @@ $('#menu-add').addEventListener('click', () => openMenuModal(null));
 
 function openMenuModal(item) {
     const isNew = !item;
-    const it = item || { id:'', name:'', description:'', category:'BEST_SELLERS', price:{tall:120,grande:145}, available:true, image:'MangoRoyal.png' };
+    const it = item || { id:'', name:'', description:'', category:'BEST_SELLERS', available:true, image:'MangoRoyal.png' };
+    const sizes = isNew
+        ? [{ size: 'Tall', price: 120 }, { size: 'Grande', price: 145 }]
+        : getMenuItemSizes(it);
     const existingImage = it.image
         ? (it.image.startsWith('http')
             ? it.image
@@ -1555,8 +1708,7 @@ function openMenuModal(item) {
                     </div>
                 </div>
             </div>
-            <label>Tall Price (₱)<input type="number" id="m-tall" value="${it.price?.tall||120}"></label>
-            <label>Grande Price (₱)<input type="number" id="m-grande" value="${it.price?.grande||145}"></label>
+            ${sizes.map((size, index) => `<label>${escapeHtml(size.size)} Price (₱)<input type="number" min="0" step="0.01" id="m-price-${index}" value="${size.price}"></label>`).join('')}
             <label class="span2" style="flex-direction:row;align-items:center;gap:10px">
                 <input type="checkbox" id="m-avail" ${it.available?'checked':''} style="width:18px;height:18px"> 
                 <span>Mark as Available for Ordering</span>
@@ -1588,12 +1740,20 @@ function openMenuModal(item) {
                     }
                     image = uploadResult.filename;
                 }
+                const updatedSizes = sizes.map((size, index) => ({
+                    ...size,
+                    price: Number($(`#m-price-${index}`).value)
+                }));
+                if (updatedSizes.some(size => !Number.isFinite(size.price) || size.price < 0)) {
+                    throw new Error('Enter a valid price for every available size.');
+                }
                 const updated = {
                     name,
                     description: $('#m-desc').value.trim(),
                     category: $('#m-cat').value,
                     image,
-                    price: { tall: +$('#m-tall').value || 120, grande: +$('#m-grande').value || 145 },
+                    sizes: updatedSizes,
+                    price: Object.fromEntries(updatedSizes.map(size => [size.size.toLowerCase(), size.price])),
                     available: $('#m-avail').checked,
                 };
 
@@ -1606,6 +1766,7 @@ function openMenuModal(item) {
                     const result = await response.json().catch(() => ({}));
                     if (!response.ok) throw new Error(result.error || `Save failed (HTTP ${response.status}).`);
                     updated.id = String(result.product_id);
+                    preloadMenuImages([updated]);
                     menuItems.push(updated);
                     recordActivity({
                         user: 'Admin User',
@@ -1615,10 +1776,8 @@ function openMenuModal(item) {
                     });
                 } else {
                     updated.id = it.id;
-                    const oldTall = Number(it.price?.tall ?? 0);
-                    const oldGrande = Number(it.price?.grande ?? 0);
-                    const newTall = Number(updated.price?.tall ?? 0);
-                    const newGrande = Number(updated.price?.grande ?? 0);
+                    const oldPrices = getMenuItemSizes(it).map(size => `${size.size}: ${peso(size.price)}`).join(' / ');
+                    const newPrices = updatedSizes.map(size => `${size.size}: ${peso(size.price)}`).join(' / ');
                     const response = await fetch(`${API_BASE}/api/admin/menu/${it.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -1626,13 +1785,14 @@ function openMenuModal(item) {
                     });
                     const result = await response.json().catch(() => ({}));
                     if (!response.ok) throw new Error(result.error || `Update failed (HTTP ${response.status}).`);
+                    preloadMenuImages([updated]);
                     menuItems = menuItems.map(x => x.id === it.id ? updated : x);
 
-                    if (oldTall !== newTall || oldGrande !== newGrande) {
+                    if (oldPrices !== newPrices) {
                         recordActivity({
                             user: 'Admin User',
                             action: 'Updated menu item',
-                            details: `${updated.name} price changed from ₱${oldTall} / ₱${oldGrande} to ₱${newTall} / ₱${newGrande}.`,
+                            details: `${updated.name} price changed from ${oldPrices || 'no sizes'} to ${newPrices || 'no sizes'}.`,
                             category: 'Menu'
                         });
                     }
@@ -1684,11 +1844,17 @@ function syncReportRangeControl() {
 function renderReports() {
     applyReportSections();
     syncReportRangeControl();
-    const list = (overviewData.topProducts || []);
-    const totalSales = overviewData.todaySales || 0;
-    const totalOrders = overviewData.totalOrders || 0;
-    const avgVal = Number(overviewData.averageOrderValue || 0);
-    const paymentMethods = Array.isArray(overviewData.paymentMethods) ? overviewData.paymentMethods : [];
+    const intervalDataMatches = overviewData.salesInterval === salesInterval && overviewData.intervalSummary !== null;
+    const list = intervalDataMatches && Array.isArray(overviewData.topProducts) ? overviewData.topProducts : [];
+    const intervalSummary = intervalDataMatches
+        ? overviewData.intervalSummary || { sales: 0, transactions: 0, averageOrderValue: 0 }
+        : { sales: 0, transactions: 0, averageOrderValue: 0 };
+    const totalSales = Number(intervalSummary.sales || 0);
+    const totalOrders = Number(intervalSummary.transactions || 0);
+    const avgVal = Number(intervalSummary.averageOrderValue || 0);
+    const paymentMethods = intervalDataMatches && Array.isArray(overviewData.paymentMethods)
+        ? overviewData.paymentMethods
+        : [];
     const intervalLabelMap = {
         day: 'Today',
         yesterday: 'Yesterday',
@@ -1697,10 +1863,16 @@ function renderReports() {
         year: 'This Year'
     };
     const currentLabel = intervalLabelMap[salesInterval] || 'Selected Interval';
+    const timeline = intervalDataMatches && Array.isArray(overviewData.salesTimeline) ? overviewData.salesTimeline : [];
+    const peakPoint = timeline
+        .filter(point => Number(point.orders) > 0)
+        .sort((a, b) => Number(b.orders) - Number(a.orders) || Number(b.sales) - Number(a.sales))[0];
+    const peakPeriod = peakPoint?.label || 'No peak yet';
 
     $('#rep-total-sales').textContent = peso(totalSales);
     $('#rep-total-tx').textContent    = totalOrders;
     $('#rep-avg-val').textContent     = peso(avgVal);
+    $('#rep-payment-subtitle').textContent = `${currentLabel} transactions by payment type`;
 
     if (list.length > 0) {
         const top = list[0];
@@ -1736,15 +1908,10 @@ function renderReports() {
         : `<tr><td colspan="3" class="empty">No payment transactions recorded for ${currentLabel.toLowerCase()}.</td></tr>`;
 
     destroyChart('hour');
-    const hoursLabels = dailyHourLabels;
-    const hourlySales = hoursLabels.map((_, hour) => {
-        const match = overviewData.hourly?.find(item => Number(item.hour) === hour || item.time === hourLabel(hour));
-        return match ? Number(match.sales) : 0;
-    });
-    const hourlyOrders = hoursLabels.map((_, hour) => {
-        const match = overviewData.hourly?.find(item => Number(item.hour) === hour || item.time === hourLabel(hour));
-        return match ? Number(match.orders) : 0;
-    });
+    const trendLabels = timeline.map(point => point.label);
+    const trendSales = timeline.map(point => Number(point.sales) || 0);
+    const trendOrders = timeline.map(point => Number(point.orders) || 0);
+    $('#rep-trend-subtitle').textContent = `Sales trend for ${currentLabel}`;
 
     const reportChartOptions = chartBase();
     reportChartOptions.scales.y.title = { display: true, text: 'Sales (₱)' };
@@ -1758,10 +1925,10 @@ function renderReports() {
     charts.hour = new Chart($('#chart-hour'), {
         type: 'bar',
         data: {
-            labels: hoursLabels,
+            labels: trendLabels,
             datasets: [
-                { label:'Sales (₱)', yAxisID:'y', data: hourlySales,  backgroundColor:'#F97316', borderRadius: 4, maxBarThickness: 28 },
-                { label:'Orders',    yAxisID:'orders', data: hourlyOrders, backgroundColor:'#3B82F6', borderRadius: 4, maxBarThickness: 28 },
+                { label:'Sales (₱)', yAxisID:'y', data: trendSales, backgroundColor:'#F97316', borderRadius: 4, maxBarThickness: 28 },
+                { label:'Orders', yAxisID:'orders', data: trendOrders, backgroundColor:'#3B82F6', borderRadius: 4, maxBarThickness: 28 },
             ]
         },
         options: reportChartOptions
@@ -1781,36 +1948,36 @@ function renderReports() {
         if (insSales) insSales.textContent = `${currentLabel} revenue is ${peso(totalSales)} across ${totalOrders} order(s) with an average ticket size of ${peso(avgVal)}.`;
         if (insSalesTag) { insSalesTag.textContent = 'Active Revenue'; insSalesTag.className = 'tag green'; }
 
-        if (insPeak) insPeak.textContent = `Most order activity recorded during: ${overviewData.peakTime || 'recent hours'}.`;
-        if (insPeakTag) { insPeakTag.textContent = overviewData.peakTime || 'Active Shift'; insPeakTag.className = 'tag orange'; }
+        if (insPeak) insPeak.textContent = `Most order activity recorded during: ${peakPeriod}.`;
+        if (insPeakTag) { insPeakTag.textContent = peakPeriod; insPeakTag.className = 'tag orange'; }
 
         const topItem = list.length ? list[0] : null;
         if (insTop && topItem) insTop.textContent = `${topItem.name} leads product sales with ${topItem.sold} unit(s) generating ${peso(topItem.revenue)}.`;
         if (insTopTag && topItem) { insTopTag.textContent = topItem.name; insTopTag.className = 'tag purple'; }
 
-        if (insStaff) insStaff.textContent = `Kitchen order transitions are smooth. Maintain preparation readiness during ${overviewData.peakTime || 'active periods'}.`;
+        if (insStaff) insStaff.textContent = `Kitchen order transitions are smooth. Maintain preparation readiness during ${peakPeriod}.`;
         if (insStaffTag) { insStaffTag.textContent = 'Optimal Prep'; insStaffTag.className = 'tag blue'; }
     } else {
         if (insSales) insSales.textContent = `No sales recorded yet for ${currentLabel.toLowerCase()}. Start placing customer orders to view trends.`;
         if (insSalesTag) { insSalesTag.textContent = 'Awaiting Orders'; insSalesTag.className = 'tag orange'; }
 
-        if (insPeak) insPeak.textContent = 'Peak traffic will automatically be calculated as orders come in throughout the day.';
+        if (insPeak) insPeak.textContent = `Peak activity for ${currentLabel.toLowerCase()} will appear when orders are recorded.`;
         if (insPeakTag) { insPeakTag.textContent = 'No Peak Yet'; insPeakTag.className = 'tag orange'; }
 
         if (insTop) insTop.textContent = 'Top performing items will appear here once orders are verified.';
         if (insTopTag) { insTopTag.textContent = 'Pending Data'; insTopTag.className = 'tag purple'; }
 
-        if (insStaff) insStaff.textContent = 'Kitchen and Cashier POS are linked and ready to receive customer orders.';
+        if (insStaff) insStaff.textContent = `Kitchen and Cashier POS are linked and ready to receive ${currentLabel.toLowerCase()} orders.`;
         if (insStaffTag) { insStaffTag.textContent = 'Ready'; insStaffTag.className = 'tag green'; }
     }
 }
 
 // End-of-Day (Z-Reading) Report
-$('#eod-report-btn')?.addEventListener('click', () => {
+$('#eod-report-btn')?.addEventListener('click', async () => {
     recordActivity({
         user: 'Admin User',
-        action: 'Exported end-of-day report',
-        details: 'End-of-Day (Z-Reading) report was generated for review/printing.',
+        action: 'Previewed end-of-day report',
+        details: 'End-of-Day (Z-Reading) report was prepared for preview.',
         category: 'Reports'
     });
 
@@ -1818,83 +1985,116 @@ $('#eod-report-btn')?.addEventListener('click', () => {
     const totalOrders = overviewData.totalOrders || 0;
     const avgVal = totalOrders ? (totalSales / totalOrders).toFixed(2) : '0.00';
     const top = overviewData.topProducts || [];
-    
-    const w = window.open('', '_blank', 'width=420,height=640');
-    if (!w) return alert('Popups blocked. Please allow popups to view the End-of-Day report.');
-    w.document.write(`
-        <html>
-        <head>
-            <title>Mango Royal - End of Day Report (Z-Reading)</title>
-            <style>
-                body { font-family: monospace; padding: 24px; font-size: 13px; color: #111; }
-                h2 { margin: 0; text-align: center; font-size: 18px; }
-                p { margin: 4px 0; text-align: center; }
-                .line { border-top: 1px dashed #333; margin: 12px 0; }
-                .row { display: flex; justify-content: space-between; padding: 3px 0; }
-                .bold { font-weight: bold; }
-                .header-box { text-align: center; margin-bottom: 8px; }
-            </style>
-        </head>
-        <body>
-            <div class="header-box">
-                <h2>MANGO ROYAL</h2>
-                <p>END-OF-DAY FINANCIAL SUMMARY (Z-READING)</p>
-                <p>Date Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
-            </div>
-            <div class="line"></div>
-            <div class="row bold"><span>METRIC</span><span>VALUE</span></div>
-            <div class="line"></div>
-            <div class="row"><span>Total Completed Orders:</span><span>${totalOrders}</span></div>
-            <div class="row bold"><span>Gross Sales Revenue:</span><span>₱${Number(totalSales).toFixed(2)}</span></div>
-            <div class="row"><span>Average Ticket Size:</span><span>₱${avgVal}</span></div>
-            <div class="row"><span>Peak Time Window:</span><span>${overviewData.peakTime || 'N/A'}</span></div>
-            <div class="line"></div>
-            <div class="bold" style="margin-bottom:6px">ITEM BREAKDOWN:</div>
-            ${top.length ? top.map(p => `<div class="row"><span>${p.name} (x${p.sold})</span><span>₱${Number(p.revenue).toFixed(2)}</span></div>`).join('') : '<div class="row"><span>No items sold today</span><span>₱0.00</span></div>'}
-            <div class="line"></div>
-            <div class="row bold"><span>NET REGISTER TOTAL:</span><span>₱${Number(totalSales).toFixed(2)}</span></div>
-            <div class="line"></div>
-            <p style="font-size:11px;color:#555">Official System Generated Audit Document<br>Generated by Admin Dashboard</p>
-            <div style="text-align:center;margin-top:20px;">
-                <button onclick="window.print()" style="padding:8px 18px;font-weight:bold;cursor:pointer;">🖨 Print / Save as PDF</button>
-            </div>
-        </body>
-        </html>
-    `);
-    w.document.close();
+    const report = {
+        title: 'End-of-Day Financial Summary (Z-Reading)',
+        generatedAt: new Date().toLocaleString(),
+        rows: [
+            ['Metric', 'Value'],
+            ['Total Completed Orders', totalOrders],
+            ['Gross Sales Revenue', `PHP ${Number(totalSales).toFixed(2)}`],
+            ['Average Ticket Size', `PHP ${avgVal}`],
+            ['Peak Time Window', overviewData.peakTime || 'N/A'],
+            ['Item Breakdown', ''],
+            ...(top.length
+                ? top.map(product => [`${product.name} (x${product.sold})`, `PHP ${Number(product.revenue).toFixed(2)}`])
+                : [['No items sold today', 'PHP 0.00']]),
+            ['NET REGISTER TOTAL', `PHP ${Number(totalSales).toFixed(2)}`],
+            ['Document', 'Official system generated audit document'],
+        ],
+    };
+    openReportPreview(report);
 });
 
 function getReportExportData() {
-    const sections = adminSettings.reportSections;
-    const report = { generatedAt: new Date().toISOString() };
-    if (sections.salesSummary) {
-        report.salesSummary = {
-            sales: Number(overviewData.todaySales || 0),
-            transactions: Number(overviewData.totalOrders || 0),
-            averageOrderValue: Number(overviewData.averageOrderValue || 0)
-        };
+    const interval = salesInterval;
+    const intervalLabel = {
+        day: 'Today',
+        yesterday: 'Yesterday',
+        week: 'This Week',
+        month: 'This Month',
+        year: 'This Year'
+    }[interval] || 'Selected interval';
+    if (overviewData.salesInterval !== interval || !overviewData.intervalSummary) {
+        throw new Error(`Report data for ${intervalLabel.toLowerCase()} is still loading. Please try again shortly.`);
     }
-    if (sections.productPerformance) report.productPerformance = overviewData.topProducts || [];
-    if (sections.paymentMethods) report.paymentMethods = overviewData.paymentMethods || [];
-    if (sections.hourlySalesTrend) report.hourlySalesTrend = overviewData.hourly || [];
-    return report;
+    const products = Array.isArray(overviewData.topProducts) ? overviewData.topProducts : [];
+    const payments = Array.isArray(overviewData.paymentMethods) ? overviewData.paymentMethods : [];
+    const intervalSummary = overviewData.intervalSummary;
+
+    return {
+        title: 'Mango Royal Sales Report & Analytics',
+        generatedAt: new Date().toISOString(),
+        interval,
+        intervalLabel,
+        salesSummary: {
+            period: intervalLabel,
+            sales: Number(intervalSummary.sales || 0),
+            transactions: Number(intervalSummary.transactions || 0),
+            averageOrderValue: Number(intervalSummary.averageOrderValue || 0)
+        },
+        productPerformance: {
+            top: products[0] || null,
+            least: products[products.length - 1] || null,
+            products
+        },
+        paymentMethods: payments,
+        insights: [
+            {
+                title: 'Sales Performance',
+                text: $('#ins-sales')?.textContent || 'No sales insight available.',
+                tag: $('#ins-sales-tag')?.textContent || ''
+            },
+            {
+                title: 'Peak Period',
+                text: $('#ins-peak')?.textContent || 'No peak-period insight available.',
+                tag: $('#ins-peak-tag')?.textContent || ''
+            },
+            {
+                title: 'Top Product',
+                text: $('#ins-top')?.textContent || 'No product insight available.',
+                tag: $('#ins-top-tag')?.textContent || ''
+            },
+            {
+                title: 'Staffing & Operations',
+                text: $('#ins-staff')?.textContent || 'No operations insight available.',
+                tag: $('#ins-staff-tag')?.textContent || ''
+            }
+        ]
+    };
 }
 
 function reportRows(report) {
-    const rows = [['Section', 'Metric', 'Value', 'Details']];
-    if (report.salesSummary) {
-        rows.push(['Sales Summary', 'Total sales', report.salesSummary.sales, '']);
-        rows.push(['Sales Summary', 'Transactions', report.salesSummary.transactions, '']);
-        rows.push(['Sales Summary', 'Average order value', report.salesSummary.averageOrderValue, '']);
+    const rows = [
+        ['Section', 'Metric', 'Value', 'Details'],
+        ['Report', 'Interval', report.intervalLabel, ''],
+        ['Report', 'Generated', new Date(report.generatedAt).toLocaleString(), '']
+    ];
+    const summary = report.salesSummary;
+    rows.push(
+        ['Basic Sales Report', 'Reporting period', summary.period, ''],
+        ['Basic Sales Report', 'Total Sales', summary.sales, ''],
+        ['Basic Sales Report', 'Transactions', summary.transactions, 'Non-voided orders'],
+        ['Basic Sales Report', 'Avg Order Value', summary.averageOrderValue, 'Per transaction']
+    );
+    const performance = report.productPerformance;
+    rows.push(
+        ['Product Performance', 'Top Selling Product', performance.top?.name || 'None yet', performance.top ? `${performance.top.sold} units sold; revenue ${performance.top.revenue}` : '0 units sold'],
+        ['Product Performance', 'Least Selling Product', performance.least?.name || 'None yet', performance.least ? `${performance.least.sold} units sold; revenue ${performance.least.revenue}` : '0 units sold']
+    );
+    performance.products.forEach((product, index) => {
+        rows.push(['Product Performance', `#${index + 1} ${product.name}`, product.sold, `Revenue: ${product.revenue}`]);
+    });
+    if (!performance.products.length) {
+        rows.push(['Product Performance', 'Items sold', 0, 'No sales data recorded']);
     }
-    (report.productPerformance || []).forEach(product => {
-        rows.push(['Product Performance', product.name, product.sold, `Revenue: ${product.revenue}`]);
+    report.paymentMethods.forEach(payment => {
+        rows.push(['Payment Methods', payment.method || 'Unknown', payment.transactions, `Sales: ${payment.sales}`]);
     });
-    (report.paymentMethods || []).forEach(payment => {
-        rows.push(['Payment Methods', payment.method, payment.transactions, `Sales: ${payment.sales}`]);
-    });
-    (report.hourlySalesTrend || []).forEach(hour => {
-        rows.push(['Hourly Sales Trend', hour.time, hour.orders, `Sales: ${hour.sales}`]);
+    if (!report.paymentMethods.length) {
+        rows.push(['Payment Methods', 'Payment methods', 'No data', `No payment transactions recorded for ${report.intervalLabel}`]);
+    }
+    report.insights.forEach(insight => {
+        rows.push(['Key Insights & Recommendations', insight.title, insight.text, insight.tag ? `Tag: ${insight.tag}` : '']);
     });
     return rows;
 }
@@ -1920,52 +2120,184 @@ function downloadReport(content, type, extension) {
     URL.revokeObjectURL(url);
 }
 
-function buildPrintableReportHtml(report) {
-    const printableRows = reportRows(report).map(row => `
-        <tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>
-    `).join('');
-    return `<!doctype html><html><head><title>Mango Royal Sales Report</title>
-        <style>body{font:14px Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}
-        table{border-collapse:collapse;width:100%;margin-top:18px}td{border:1px solid #d1d5db;padding:8px}
-        tr:first-child{font-weight:bold;background:#f3f4f6}@media print{button{display:none}}</style>
-        </head><body><h1>Mango Royal Sales Report</h1><p>Generated ${escapeHtml(new Date(report.generatedAt).toLocaleString())}</p>
-        <table>${printableRows}</table><button onclick="window.print()">Print / Save as PDF</button></body></html>`;
+function buildReportPreviewHtml(report) {
+    if (Array.isArray(report.rows)) {
+        const [headers, ...rows] = report.rows;
+        const tableRows = rows.map(row => `
+            <tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>
+        `).join('');
+        const generatedAt = new Date(report.generatedAt).toLocaleString();
+        return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>${escapeHtml(report.title)}</title>
+            <style>
+            :root{font-family:Inter,"Segoe UI",Arial,sans-serif;color:#172033;background:#f1f5f9}
+            *{box-sizing:border-box}body{margin:0;padding:32px 20px}.report{max-width:900px;margin:0 auto;background:#fff;padding:40px;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 14px 40px #0f172a12}
+            header{padding-bottom:22px;border-bottom:2px solid #f97316}h1{margin:0;font-size:25px}header p{color:#64748b;font-size:13px}
+            table{border-collapse:collapse;width:100%;margin-top:24px;font-size:13px}th,td{padding:10px 12px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}th{background:#fff7ed;color:#9a3412;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+            @media(max-width:640px){body{padding:0}.report{padding:22px 16px;border-radius:0}}
+            </style></head><body><main class="report"><header><h1>${escapeHtml(report.title)}</h1><p>Generated ${escapeHtml(generatedAt)}</p></header>
+            <table><thead><tr>${headers.map(cell => `<th>${escapeHtml(cell)}</th>`).join('')}</tr></thead><tbody>${tableRows}</tbody></table></main></body></html>`;
+    }
+    const formatCurrency = value => peso(Number(value) || 0);
+    const table = (headers, rows, emptyText) => `
+        <div class="table-wrap"><table><thead><tr>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.length
+            ? rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')
+            : `<tr><td colspan="${headers.length}" class="empty">${escapeHtml(emptyText)}</td></tr>`}</tbody></table></div>`;
+    const summary = report.salesSummary;
+    const products = report.productPerformance.products;
+    const productRows = products.map((product, index) => [
+        `#${index + 1}`,
+        product.name,
+        Number(product.sold).toLocaleString('en-US'),
+        formatCurrency(product.revenue)
+    ]);
+    const paymentRows = report.paymentMethods.map(payment => [
+        payment.method || 'Unknown',
+        Number(payment.transactions || 0).toLocaleString('en-US'),
+        formatCurrency(payment.sales)
+    ]);
+    const insightCards = report.insights.map(insight => `
+        <article class="insight"><h3>${escapeHtml(insight.title)}</h3><p>${escapeHtml(insight.text)}</p>
+        ${insight.tag ? `<span>${escapeHtml(insight.tag)}</span>` : ''}</article>`).join('');
+    const generatedAt = new Date(report.generatedAt).toLocaleString();
+
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>${escapeHtml(report.title)}</title>
+        <style>
+        :root{font-family:Inter,"Segoe UI",Arial,sans-serif;color:#172033;background:#f1f5f9}
+        *{box-sizing:border-box}body{margin:0;padding:32px 20px}.report{max-width:1050px;margin:0 auto;background:#fff;padding:40px;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 14px 40px #0f172a12}
+        .masthead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:24px;border-bottom:2px solid #f97316}
+        h1{margin:0;font-size:26px;letter-spacing:-.03em}.subtitle{margin:8px 0 0;color:#64748b}.meta{text-align:right;color:#64748b;font-size:13px;line-height:1.7}
+        section{margin-top:28px;break-inside:avoid}h2{font-size:18px;margin:0 0 14px}.summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+        .metric{padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:linear-gradient(145deg,#fff,#fff7ed)}.metric span{display:block;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metric strong{display:block;margin-top:8px;font-size:24px}
+        .highlight-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.highlight{padding:14px 16px;border:1px solid #e2e8f0;border-radius:12px}.highlight span{display:block;color:#64748b;font-size:12px}.highlight strong{display:block;margin-top:6px;font-size:16px}
+        .table-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:12px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:10px 12px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}th{background:#fff7ed;color:#9a3412;font-size:11px;text-transform:uppercase;letter-spacing:.05em}tbody tr:last-child td{border-bottom:0}.empty{color:#64748b;text-align:center}
+        .insights{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.insight{padding:16px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}.insight h3{font-size:14px;margin:0 0 8px}.insight p{margin:0;color:#475569;line-height:1.55}.insight span{display:inline-block;margin-top:10px;padding:4px 8px;border-radius:999px;background:#ffedd5;color:#9a3412;font-size:11px;font-weight:700}
+        .footer{margin-top:30px;padding-top:16px;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px}
+        @media(max-width:640px){body{padding:0}.report{padding:22px 16px;border-radius:0}.masthead{display:block}.meta{text-align:left;margin-top:14px}.summary{grid-template-columns:1fr}.highlight-grid,.insights{grid-template-columns:1fr}}
+        @page{size:A4;margin:14mm}
+        @media print{:root{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{padding:0;background:#fff}.report{max-width:none;border:0;border-radius:0;box-shadow:none;padding:0}.table-wrap{overflow:visible}section{break-inside:avoid}.insight{break-inside:avoid}}
+        </style></head><body><main class="report">
+        <header class="masthead"><div><h1>${escapeHtml(report.title)}</h1><p class="subtitle">Sales performance, product mix, payment breakdown, and operating insights.</p></div>
+        <div class="meta"><div><strong>Reporting interval</strong>: ${escapeHtml(report.intervalLabel)}</div><div><strong>Generated</strong>: ${escapeHtml(generatedAt)}</div></div></header>
+        <section><h2>Basic Sales Report · ${escapeHtml(summary.period)}</h2><div class="summary">
+            <div class="metric"><span>Total Sales</span><strong>${escapeHtml(formatCurrency(summary.sales))}</strong></div>
+            <div class="metric"><span>Transactions</span><strong>${escapeHtml(Number(summary.transactions).toLocaleString('en-US'))}</strong></div>
+            <div class="metric"><span>Avg Order Value</span><strong>${escapeHtml(formatCurrency(summary.averageOrderValue))}</strong></div>
+        </div></section>
+        <section><h2>Product Performance · ${escapeHtml(report.intervalLabel)}</h2><div class="highlight-grid">
+            <div class="highlight"><span>Top Selling Product</span><strong>${escapeHtml(report.productPerformance.top?.name || 'None yet')}</strong>
+            <span>${report.productPerformance.top ? `${escapeHtml(Number(report.productPerformance.top.sold).toLocaleString('en-US'))} units sold · ${escapeHtml(formatCurrency(report.productPerformance.top.revenue))}` : '0 units sold'}</span></div>
+            <div class="highlight"><span>Least Selling Product</span><strong>${escapeHtml(report.productPerformance.least?.name || 'None yet')}</strong>
+            <span>${report.productPerformance.least ? `${escapeHtml(Number(report.productPerformance.least.sold).toLocaleString('en-US'))} units sold · ${escapeHtml(formatCurrency(report.productPerformance.least.revenue))}` : '0 units sold'}</span></div>
+        </div><h3>QTY Sold per Item</h3>${table(['Rank', 'Product', 'Qty', 'Revenue'], productRows, 'No sales data recorded for this interval.')}</section>
+        <section><h2>Payment Methods · ${escapeHtml(report.intervalLabel)}</h2><p class="subtitle">${escapeHtml(report.intervalLabel)} transactions by payment type.</p>
+            ${table(['Payment Method', 'Transactions', 'Sales'], paymentRows, `No payment transactions recorded for ${report.intervalLabel.toLowerCase()}.`)}</section>
+        <section><h2>Key Insights &amp; Recommendations</h2><div class="insights">${insightCards}</div></section>
+        <footer class="footer">Mango Royal · Sales Report &amp; Analytics · Generated ${escapeHtml(generatedAt)}</footer>
+        </main></body></html>`;
 }
 
-function openPrintableReport(report) {
-    const windowRef = window.open('', '_blank', 'width=900,height=700');
-    if (!windowRef) return alert('Popups blocked. Allow popups to print or save the report.');
-    windowRef.document.write(buildPrintableReportHtml(report));
-    windowRef.document.close();
-    return windowRef;
+function openReportPreview(report, options = {}) {
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.className = 'report-preview-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'report-preview-title');
+    overlay.innerHTML = `
+        <div class="report-preview-toolbar">
+            <h2 id="report-preview-title">${escapeHtml(options.title || 'Report Preview')}</h2>
+            <div class="report-preview-actions">
+                <button type="button" class="btn btn-primary" data-print-report-preview>${escapeHtml(options.printLabel || 'Print Report')}</button>
+                <button type="button" class="btn btn-ghost" data-close-report-preview>Close Preview</button>
+            </div>
+        </div>
+        <iframe class="report-preview-frame" title="${escapeHtml(options.frameTitle || 'Full sales report preview')}"></iframe>
+    `;
+    const frame = overlay.querySelector('iframe');
+    frame.srcdoc = options.html || buildReportPreviewHtml(report);
+    const closeButton = overlay.querySelector('[data-close-report-preview]');
+    const printButton = overlay.querySelector('[data-print-report-preview]');
+    printButton.addEventListener('click', () => {
+        try {
+            frame.contentWindow.focus();
+            frame.contentWindow.print();
+            recordActivity({
+                user: 'Admin User',
+                action: options.action || 'Printed sales report',
+                details: options.activityDetails || `Report${report.intervalLabel ? ` for ${report.intervalLabel}` : ''} was opened in the browser print dialog.`,
+                category: options.category || 'Reports'
+            });
+        } catch (error) {
+            alert(`Could not open the print dialog: ${error.message}`);
+        }
+    });
+    const closePreview = () => {
+        overlay.remove();
+        document.body.classList.remove('report-preview-open');
+        document.removeEventListener('keydown', handlePreviewKeydown);
+        previousFocus?.focus?.();
+    };
+    const handlePreviewKeydown = event => {
+        if (event.key === 'Escape') closePreview();
+    };
+    closeButton.addEventListener('click', closePreview);
+    overlay.addEventListener('click', event => {
+        if (event.target === overlay) closePreview();
+    });
+    document.addEventListener('keydown', handlePreviewKeydown);
+    document.body.classList.add('report-preview-open');
+    document.body.appendChild(overlay);
+    closeButton.focus();
+    return overlay;
 }
 
-function runReportExport(mode = 'digital') {
-    const report = getReportExportData();
-    const doDigital = mode === 'digital' || mode === 'digital-print';
-    const doPrint = mode === 'print' || mode === 'digital-print';
-    const exportLabel = mode === 'digital' ? 'Digital Export' : mode === 'print' ? 'Print' : 'Digital + Print Export';
+function runReportExport(mode = 'preview') {
+    let report;
+    try {
+        report = getReportExportData();
+    } catch (error) {
+        alert(error.message);
+        return;
+    }
+    const resolvedMode = mode === 'default'
+        ? adminSettings.defaultFormat === 'csv'
+            ? 'csv'
+            : adminSettings.defaultFormat === 'json'
+                ? 'json'
+                : 'preview'
+        : mode;
+    const exportLabels = {
+        print: 'Printer',
+        preview: 'Full Report Preview',
+        default: `Default Format (${adminSettings.defaultFormat.toUpperCase()})`,
+        csv: 'CSV Download',
+        json: 'JSON Download'
+    };
+
+    if (resolvedMode === 'print') {
+        openReportPreview(report);
+        return;
+    }
 
     recordActivity({
         user: 'Admin User',
         action: 'Exported sales report',
-        details: `Sales report was exported via ${exportLabel}.`,
+        details: `Sales report was prepared via ${exportLabels[mode] || exportLabels.preview}.`,
         category: 'Reports'
     });
 
-    if (doDigital) {
-        if (adminSettings.defaultFormat === 'json') {
-            downloadReport(JSON.stringify(report, null, 2), 'application/json', 'json');
-        } else if (adminSettings.defaultFormat === 'pdf') {
-            openPrintableReport(report);
-        } else {
-            downloadReport(reportCsv(report), 'text/csv;charset=utf-8', 'csv');
-        }
+    if (resolvedMode === 'csv') {
+        downloadReport(reportCsv(report), 'text/csv;charset=utf-8', 'csv');
+        return;
     }
-
-    if (doPrint) {
-        openPrintableReport(report);
+    if (resolvedMode === 'json') {
+        downloadReport(JSON.stringify(report, null, 2), 'application/json', 'json');
+        return;
     }
+    openReportPreview(report);
 }
 
 const exportRepButton = $('#export-rep-btn');
@@ -1978,9 +2310,11 @@ if (exportRepButton) {
     const exportMenu = document.createElement('div');
     exportMenu.className = 'report-export-menu';
     exportMenu.innerHTML = `
-        <button type="button" class="report-export-option is-primary" data-export-mode="digital">Digital Export</button>
-        <button type="button" class="report-export-option" data-export-mode="print">Print</button>
-        <button type="button" class="report-export-option is-danger" data-export-mode="digital-print">Digital + Print Export</button>
+        <button type="button" class="report-export-option" data-export-mode="print">Print Report</button>
+        <button type="button" class="report-export-option is-primary" data-export-mode="preview">Preview Full Report</button>
+        <button type="button" class="report-export-option" data-export-mode="default">Export Default Format</button>
+        <button type="button" class="report-export-option" data-export-mode="csv">Download CSV</button>
+        <button type="button" class="report-export-option" data-export-mode="json">Download JSON</button>
     `;
     exportWrap.appendChild(exportMenu);
 
@@ -2040,7 +2374,21 @@ function renderActivityLog() {
             </tr>
         `).join('');
 }
-$('#activity-refresh')?.addEventListener('click', renderActivityLog);
+async function loadActivityLog() {
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/activity-logs`);
+        const result = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        if (!Array.isArray(result)) throw new Error('The activity log response is invalid.');
+        activityLogs = result.map(log => ({ ...log, timestamp: new Date(log.timestamp) }));
+        localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLogs.slice(0, 200)));
+        renderActivityLog();
+    } catch (error) {
+        console.error('Could not load the server activity log:', error);
+        renderActivityLog();
+    }
+}
+$('#activity-refresh')?.addEventListener('click', () => void loadActivityLog());
 
 /* ---------- Users ---------- */
 function renderUsers() {
@@ -2062,7 +2410,7 @@ function renderUsers() {
             if (icon) icon.textContent = '←';
             if (text) text.textContent = 'Back';
         } else {
-            if (icon) icon.textContent = 'A';
+            if (icon) icon.innerHTML = '<span class="archive-icon-shape"></span>';
             if (text) text.textContent = 'Archived';
         }
     }
@@ -2081,7 +2429,7 @@ function renderUsers() {
                 ${showArchivedUsers ? '<button class="btn btn-sm btn-ghost" data-u-restore="' + u.id + '">Restore</button>' : `
                     <button class="btn btn-sm btn-ghost" data-u-toggle="${u.id}">${u.status==='Active'?'Deactivate':'Activate'}</button>
                     <button class="btn btn-sm btn-info" data-u-edit="${u.id}">Edit</button>
-                    <button class="btn btn-sm btn-danger" data-u-del="${u.id}" title="Archive user">A</button>
+                    <button class="btn btn-sm btn-danger" data-u-del="${u.id}" title="Archive user" aria-label="Archive ${escapeHtml(u.name)}"><span class="archive-icon-shape" aria-hidden="true"></span></button>
                 `}
             </td>
         </tr>
@@ -2099,7 +2447,7 @@ function renderUsers() {
         if (!u) return;
         openModal('Archive User', `
             <div class="archive-confirmation">
-                <div class="archive-confirmation-icon" aria-hidden="true">A</div>
+                <div class="archive-confirmation-icon" aria-hidden="true"><span class="archive-icon-shape"></span></div>
                 <div class="archive-confirmation-copy">
                     <h4>Archive "${escapeHtml(u.name)}"?</h4>
                     <p>This will keep the user record on file but remove them from active access.</p>
@@ -2187,6 +2535,8 @@ const assistantPanel = $('#assistant-panel');
 const assistantInput = $('#assistant-input');
 const assistantMessages = $('#assistant-messages');
 const assistantForm = $('#assistant-form');
+const assistantOpenButton = $('#assistant-open');
+let draggedDashboardCard = null;
 
 function setAssistantOpen(isOpen) {
     assistantDock.classList.toggle('is-open', isOpen);
@@ -2195,74 +2545,357 @@ function setAssistantOpen(isOpen) {
     if (isOpen) requestAnimationFrame(() => assistantInput.focus());
 }
 
-function answerAnalyticsQuestion(question) {
-    const query = question.toLowerCase();
-    const bestProduct = overviewData.topProducts?.[0];
-    const completed = Number(overviewData.completedOrders || 0);
-    const inProgress = Number(overviewData.inProgressOrders || 0);
-    const voided = Number(overviewData.voidedOrders || 0);
-    const dineIn = Number(overviewData.dineInOrders || 0);
-    const takeOut = Number(overviewData.takeOutOrders || 0);
+function highlightAssistantDropTarget() {
+    assistantDock.classList.add('is-drag-target');
+    const hint = $('#assistant-capsule-hint');
+    if (hint) {
+        hint.dataset.defaultText ||= hint.textContent;
+        hint.textContent = `Drop “${draggedDashboardCard?.dataset.cardLabel || 'card'}” to send to AI`;
+    }
+}
 
-    if (!operationalMetricsAvailable && /average|avg|ticket|void|cancel|progress|pending|waiting|status|complete|ready|dine.?in|take.?out|order mix/.test(query)) {
-        return 'These operations metrics are not available from the running backend yet. Restart the Mango Royal backend, then reload the dashboard.';
+function createDashboardDragPreview(card, dataTransfer) {
+    const preview = document.createElement('div');
+    preview.className = 'dashboard-drag-preview';
+
+    const mark = document.createElement('span');
+    mark.className = 'dashboard-drag-preview-mark';
+    mark.textContent = 'AI';
+
+    const copy = document.createElement('span');
+    copy.className = 'dashboard-drag-preview-copy';
+    const title = document.createElement('strong');
+    title.textContent = 'Send to Royal Insights';
+    const key = document.createElement('small');
+    key.textContent = `Card key: ${card.dataset.cardType || 'dashboard-card'}`;
+    copy.append(title, key);
+    preview.append(mark, copy);
+    document.body.appendChild(preview);
+    dataTransfer.setDragImage(preview, 18, 18);
+    window.setTimeout(() => preview.remove(), 0);
+}
+
+function resetDashboardCardDrag() {
+    draggedDashboardCard?.classList.remove('is-dragging');
+    draggedDashboardCard = null;
+    assistantDock.classList.remove('is-drag-target', 'is-drop-target');
+    const hint = $('#assistant-capsule-hint');
+    if (hint?.dataset.defaultText) hint.textContent = hint.dataset.defaultText;
+}
+
+function appendAssistantInlineMarkdown(parent, text) {
+    const tokenPattern = /(\*\*[^*\n]+?\*\*|__[^_\n]+?__|`[^`\n]+`|\*[^*\n]+?\*|_[^_\n]+?_)/g;
+    let lastIndex = 0;
+
+    for (const match of text.matchAll(tokenPattern)) {
+        const index = match.index;
+        if (index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, index)));
+
+        const token = match[0];
+        const isBold = token.startsWith('**') || token.startsWith('__');
+        const isCode = token.startsWith('`');
+        const wrapper = document.createElement(isBold ? 'strong' : isCode ? 'code' : 'em');
+        const delimiterLength = isBold ? 2 : 1;
+        wrapper.textContent = token.slice(delimiterLength, -delimiterLength);
+        parent.appendChild(wrapper);
+        lastIndex = index + token.length;
     }
 
-    if (/best|top|popular|seller|product|item/.test(query)) {
-        return bestProduct
-            ? `${bestProduct.name} is today's best seller with ${bestProduct.sold} item${bestProduct.sold === 1 ? '' : 's'} sold (${peso(bestProduct.revenue)} in sales).`
-            : 'There are no completed item sales recorded today yet.';
+    if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+}
+
+function renderAssistantMarkdown(parent, text) {
+    let paragraphLines = [];
+    let currentList = null;
+
+    const flushParagraph = () => {
+        if (!paragraphLines.length) return;
+        const paragraph = document.createElement('p');
+        appendAssistantInlineMarkdown(paragraph, paragraphLines.join(' '));
+        parent.appendChild(paragraph);
+        paragraphLines = [];
+    };
+
+    const flushList = () => {
+        if (!currentList) return;
+        parent.appendChild(currentList);
+        currentList = null;
+    };
+
+    for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+        const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+        const unorderedItem = /^\s*[-*]\s+(.+)$/.exec(line);
+        const orderedItem = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+
+        if (!line.trim()) {
+            flushParagraph();
+            flushList();
+            continue;
+        }
+
+        if (heading) {
+            flushParagraph();
+            flushList();
+            const element = document.createElement(`h${Math.min(4, heading[1].length + 1)}`);
+            appendAssistantInlineMarkdown(element, heading[2]);
+            parent.appendChild(element);
+            continue;
+        }
+
+        if (unorderedItem || orderedItem) {
+            flushParagraph();
+            const listTag = unorderedItem ? 'ul' : 'ol';
+            if (currentList?.tagName.toLowerCase() !== listTag) {
+                flushList();
+                currentList = document.createElement(listTag);
+            }
+            const item = document.createElement('li');
+            appendAssistantInlineMarkdown(item, (unorderedItem || orderedItem)[1]);
+            currentList.appendChild(item);
+            continue;
+        }
+
+        flushList();
+        paragraphLines.push(line.trim());
     }
-    if (/average|avg|ticket/.test(query)) {
-        return `Today's average order value, excluding voided orders, is ${peso(overviewData.averageOrderValue || 0)}.`;
+
+    flushParagraph();
+    flushList();
+}
+
+const salesIntervalLabels = {
+    day: 'Today · hourly',
+    yesterday: 'Yesterday · hourly',
+    week: 'Last 7 days · daily',
+    month: 'Month to date · daily',
+    year: 'Year to date · monthly'
+};
+
+function createDashboardCardSnapshot(card) {
+    const type = card.dataset.cardType || 'dashboard-card';
+    const cardKey = type;
+    const label = card.dataset.cardLabel || 'Dashboard';
+    const interval = overviewData.salesInterval || salesInterval;
+    const intervalLabel = salesIntervalLabels[interval] || 'Selected interval';
+    const topProducts = Array.isArray(overviewData.topProducts) ? overviewData.topProducts : [];
+    const timeline = Array.isArray(overviewData.salesTimeline) ? overviewData.salesTimeline : [];
+    let metrics = [];
+    let dataSummary = '';
+    let periodLabel = 'Today';
+
+    if (type === 'sales-chart') {
+        periodLabel = intervalLabel;
+        const totalSales = timeline.reduce((sum, point) => sum + Number(point.sales || 0), 0);
+        const totalOrders = timeline.reduce((sum, point) => sum + Number(point.orders || 0), 0);
+        metrics = [
+            { label: 'Sales', value: peso(totalSales) },
+            { label: 'Orders', value: String(totalOrders) }
+        ];
+        dataSummary = timeline.length
+            ? timeline.map(point => `${point.label}: ${peso(Number(point.sales || 0))}, ${Number(point.orders || 0)} orders`).join('; ')
+            : 'No chart data is currently available.';
+    } else if (type === 'todays-sales') {
+        const todaySales = Number(overviewData.todaySales || 0);
+        const salesDelta = Number(overviewData.salesDelta || 0);
+        metrics = [
+            { label: 'Sales today', value: peso(todaySales) },
+            { label: 'Vs yesterday', value: `${salesDelta > 0 ? '+' : ''}${peso(salesDelta)}` }
+        ];
+        dataSummary = `Sales today: ${peso(todaySales)}; sales difference from yesterday: ${peso(salesDelta)}.`;
+    } else if (type === 'total-orders') {
+        const totalOrders = Number(overviewData.totalOrders || 0);
+        const ordersDelta = Number(overviewData.ordersDelta || 0);
+        metrics = [
+            { label: 'Orders today', value: String(totalOrders) },
+            { label: 'Vs yesterday', value: `${ordersDelta > 0 ? '+' : ''}${ordersDelta}` }
+        ];
+        dataSummary = `Orders today: ${totalOrders}; order difference from yesterday: ${ordersDelta}.`;
+    } else if (type === 'best-seller') {
+        periodLabel = intervalLabel;
+        const best = topProducts[0];
+        metrics = best
+            ? [
+                { label: 'Top item', value: best.name },
+                { label: 'Sold', value: String(Number(best.sold || 0)) },
+                { label: 'Revenue', value: peso(Number(best.revenue || 0)) }
+            ]
+            : [{ label: 'Top item', value: 'No sales yet' }];
+        dataSummary = topProducts.length
+            ? topProducts.map((item, index) =>
+                `${index + 1}. ${item.name}: ${Number(item.sold || 0)} sold, ${peso(Number(item.revenue || 0))} revenue`
+            ).join('; ')
+            : 'No product sales are recorded for this interval.';
+    } else if (type === 'items-sold') {
+        periodLabel = intervalLabel;
+        const best = topProducts[0];
+        metrics = best
+            ? [
+                { label: 'Top item', value: best.name },
+                { label: 'Quantity', value: String(Number(best.sold || 0)) }
+            ]
+            : [{ label: 'Items sold', value: '0' }];
+        dataSummary = topProducts.length
+            ? topProducts.map((item, index) =>
+                `${index + 1}. ${item.name}: ${Number(item.sold || 0)} sold, ${peso(Number(item.revenue || 0))} revenue`
+            ).join('; ')
+            : 'No item sales are recorded for this interval.';
+    } else if (type === 'operations') {
+        metrics = [
+            { label: 'Average order', value: operationalMetricsAvailable ? peso(Number(overviewData.averageOrderValue || 0)) : 'Unavailable' },
+            { label: 'In progress', value: operationalMetricsAvailable ? String(Number(overviewData.inProgressOrders || 0)) : 'Unavailable' },
+            { label: 'Completed', value: operationalMetricsAvailable ? String(Number(overviewData.completedOrders || 0)) : 'Unavailable' },
+            { label: 'Voided', value: operationalMetricsAvailable ? String(Number(overviewData.voidedOrders || 0)) : 'Unavailable' }
+        ];
+        dataSummary = operationalMetricsAvailable
+            ? `Average order: ${peso(Number(overviewData.averageOrderValue || 0))}; in progress: ${Number(overviewData.inProgressOrders || 0)}; completed: ${Number(overviewData.completedOrders || 0)}; voided: ${Number(overviewData.voidedOrders || 0)}.`
+            : 'Operations metrics are currently unavailable.';
+    } else {
+        const details = card.innerText.replace(/\s+/g, ' ').trim();
+        metrics = [{ label: 'Card data', value: details || label }];
+        dataSummary = details || 'No card data is currently available.';
     }
-    if (/void|cancel/.test(query)) {
-        return `${voided} order${voided === 1 ? '' : 's'} ${voided === 1 ? 'has' : 'have'} been voided today.`;
-    }
-    if (/progress|pending|waiting|status|complete|ready/.test(query)) {
-        return `Today's order status: ${inProgress} in progress, ${completed} ready for pickup, and ${voided} voided.`;
-    }
-    if (/dine.?in|take.?out|order mix/.test(query)) {
-        return `Today's non-voided order mix is ${dineIn} dine-in and ${takeOut} take-out.`;
-    }
-    if (/peak|busy|hour|time/.test(query)) {
-        return overviewData.peakTime && overviewData.peakTime !== 'None yet'
-            ? `${overviewData.peakTime} is today's busiest hour based on order count.`
-            : 'There is not enough order activity today to identify a peak hour yet.';
-    }
-    if (/sales|revenue|performance|today/.test(query)) {
-        const averageOrder = operationalMetricsAvailable
-            ? ` The average non-voided order is ${peso(overviewData.averageOrderValue)}.`
-            : '';
-        return `Today's sales are ${peso(overviewData.todaySales || 0)} from ${overviewData.totalOrders || 0} order${overviewData.totalOrders === 1 ? '' : 's'}.${averageOrder}`;
-    }
-    const operationsSummary = operationalMetricsAvailable ? `${inProgress} in progress` : 'operations metrics unavailable';
-    return `Today's snapshot: ${peso(overviewData.todaySales || 0)} in sales, ${overviewData.totalOrders || 0} orders, ${operationsSummary}, and ${bestProduct ? `${bestProduct.name} is the top seller` : 'no top seller yet'}. Try asking about sales, average order, order status, order mix, best seller, or peak time.`;
+
+    return {
+        cardKey,
+        label,
+        intervalLabel: periodLabel,
+        metrics,
+        analysisPrompt: `Dashboard card identifier: ${cardKey}. Display name: "${label}". `
+            + `Analyze this identified card for ${periodLabel}. `
+            + `Use only the following live dashboard data: ${dataSummary} `
+            + 'Summarize the key takeaway and give one practical action. Do not infer missing data.'
+    };
+}
+
+function appendDashboardCardCapsule(snapshot) {
+    const capsule = document.createElement('div');
+    capsule.className = 'assistant-message dashboard-context-capsule';
+    capsule.setAttribute(
+        'aria-label',
+        `Sent to AI: ${snapshot.label}, card key ${snapshot.cardKey}, for ${snapshot.intervalLabel}: ${snapshot.metrics.map(metric => `${metric.label}: ${metric.value}`).join(', ')}`
+    );
+
+    const mark = document.createElement('span');
+    mark.className = 'dashboard-context-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = 'AI';
+
+    const content = document.createElement('span');
+    content.className = 'dashboard-context-content';
+    const title = document.createElement('strong');
+    title.textContent = snapshot.label;
+    const interval = document.createElement('small');
+    interval.textContent = snapshot.intervalLabel;
+    const key = document.createElement('code');
+    key.textContent = `Card key: ${snapshot.cardKey}`;
+    content.append(title, interval, key);
+
+    const metrics = document.createElement('span');
+    metrics.className = 'dashboard-context-metrics';
+    snapshot.metrics.forEach(metric => {
+        const chip = document.createElement('span');
+        chip.textContent = `${metric.label}: ${metric.value}`;
+        metrics.appendChild(chip);
+    });
+
+    capsule.append(mark, content, metrics);
+    assistantMessages.appendChild(capsule);
+    assistantMessages.scrollTop = assistantMessages.scrollHeight;
 }
 
 function appendAssistantMessage(text, sender) {
     const message = document.createElement('div');
     message.className = `assistant-message ${sender}`;
-    message.textContent = text;
+    if (sender === 'assistant') {
+        renderAssistantMarkdown(message, text);
+    } else {
+        message.textContent = text;
+    }
     assistantMessages.appendChild(message);
     assistantMessages.scrollTop = assistantMessages.scrollHeight;
     return message;
 }
 
-function sendInsightQuestion(question) {
-    const message = question.trim();
-    if (!message) return;
+let assistantRequestPending = false;
 
+async function sendInsightQuestion(question, { dashboardCardSnapshot } = {}) {
+    const message = question.trim();
+    if (!message || assistantRequestPending) return;
+
+    assistantRequestPending = true;
     assistantDock.classList.add('has-conversation');
     $('#assistant-welcome')?.remove();
     $('#assistant-prompts')?.remove();
-    appendAssistantMessage(message, 'user');
-    const thinking = appendAssistantMessage("Checking today's dashboard data...", 'thinking');
-    window.setTimeout(() => {
+    if (dashboardCardSnapshot) {
+        appendDashboardCardCapsule(dashboardCardSnapshot);
+    } else {
+        appendAssistantMessage(message, 'user');
+    }
+    const sendButton = assistantForm.querySelector('button[type="submit"]');
+    sendButton.disabled = true;
+    const thinking = appendAssistantMessage('Checking live dashboard data with Royal Insights...', 'thinking');
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/assistant`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || `Royal Insights request failed (HTTP ${response.status}).`);
+        }
+        if (typeof result.reply !== 'string' || !result.reply.trim()) {
+            throw new Error('Royal Insights returned an empty response. Please try again.');
+        }
         thinking.remove();
-        appendAssistantMessage(answerAnalyticsQuestion(message), 'assistant');
-    }, 220);
+        appendAssistantMessage(result.reply.trim(), 'assistant');
+    } catch (error) {
+        console.error('Royal Insights request failed:', error);
+        thinking.remove();
+        appendAssistantMessage(error.message || 'Could not reach Royal Insights. Please try again.', 'assistant error');
+    } finally {
+        assistantRequestPending = false;
+        sendButton.disabled = false;
+    }
 }
+
+document.addEventListener('dragstart', event => {
+    const card = event.target.closest?.('#view-dashboard [data-card-type][draggable="true"]');
+    if (!card || !event.dataTransfer) return;
+
+    draggedDashboardCard = card;
+    card.classList.add('is-dragging');
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', card.dataset.cardType);
+    createDashboardDragPreview(card, event.dataTransfer);
+    highlightAssistantDropTarget();
+});
+
+assistantOpenButton.addEventListener('dragover', event => {
+    if (!draggedDashboardCard) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    assistantDock.classList.add('is-drop-target');
+});
+
+assistantOpenButton.addEventListener('dragleave', event => {
+    if (event.relatedTarget && assistantOpenButton.contains(event.relatedTarget)) return;
+    assistantDock.classList.remove('is-drop-target');
+});
+
+assistantOpenButton.addEventListener('drop', event => {
+    if (!draggedDashboardCard) return;
+    event.preventDefault();
+
+    const card = draggedDashboardCard;
+    resetDashboardCardDrag();
+
+    const snapshot = createDashboardCardSnapshot(card);
+    void sendInsightQuestion(snapshot.analysisPrompt, { dashboardCardSnapshot: snapshot });
+});
+
+document.addEventListener('dragend', resetDashboardCardDrag);
 
 $('#assistant-open').addEventListener('click', () => setAssistantOpen(true));
 $('#assistant-close').addEventListener('click', () => setAssistantOpen(false));
@@ -2271,11 +2904,11 @@ assistantForm.addEventListener('submit', event => {
     const question = assistantInput.value;
     if (!question.trim()) return;
     assistantInput.value = '';
-    sendInsightQuestion(question);
+    void sendInsightQuestion(question);
 });
 $('#assistant-prompts').addEventListener('click', event => {
     const prompt = event.target.closest('button');
-    if (prompt) sendInsightQuestion(prompt.textContent);
+    if (prompt) void sendInsightQuestion(prompt.textContent);
 });
 document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && assistantDock.classList.contains('is-open')) {

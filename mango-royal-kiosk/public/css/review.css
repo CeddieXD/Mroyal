@@ -20,13 +20,6 @@
     font-size: 1.7rem;
     font-weight: 900;
 }
-.rev-order-type {
-    background: var(--mango-red);
-    color: white;
-    padding: 8px 18px;
-    border-radius: 999px;
-    font-weight: 700;
-}
 .rev-body {
     display: grid;
     grid-template-columns: 1fr 400px;

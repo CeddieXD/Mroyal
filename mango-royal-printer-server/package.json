@@ -1,0 +1,13 @@
+{
+  "name": "mango-royal-printer-server",
+  "version": "1.0.0",
+  "description": "Local Windows print and report PDF service for Mango Royal",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "pdfkit": "^0.17.2"
+  }
+}

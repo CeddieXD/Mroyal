@@ -7,6 +7,8 @@ const https = require('https');
 const multer = require('multer');
 const db = require('../config/db');
 const { ensureAuditTable, normalizeAddOns } = require('../audit-logs');
+const { listStaffActivity, writeStaffActivity } = require('../staff-activity');
+const { saveReportPdf } = require('../printer-client');
 const {
     SettingsValidationError,
     normalizeAdminSettings,
@@ -15,6 +17,49 @@ const {
 } = require('../config/admin-settings');
 
 const router = express.Router();
+
+router.get('/activity-logs', async (_req, res) => {
+    try {
+        res.json(await listStaffActivity());
+    } catch (error) {
+        console.error('[admin] activity log could not be loaded:', error.message);
+        res.status(500).json({ error: 'Activity log could not be loaded.' });
+    }
+});
+
+router.post('/activity-logs', async (req, res) => {
+    const { action, details, category } = req.body || {};
+    const categories = new Set(['Menu', 'Reports', 'System', 'Users', 'Transactions']);
+    if (typeof action !== 'string' || !action.trim() || action.length > 100
+        || typeof details !== 'string' || !details.trim() || details.length > 500
+        || !categories.has(category)) {
+        return res.status(400).json({ error: 'Activity action, details, or category is invalid.' });
+    }
+    try {
+        const entry = await writeStaffActivity({
+            username: req.staff.username,
+            displayName: req.staff.displayName,
+            role: req.staff.role,
+            action: action.trim(),
+            details: details.trim(),
+            category,
+        });
+        res.status(201).json(entry);
+    } catch (error) {
+        console.error('[admin] activity entry could not be recorded:', error.message);
+        res.status(500).json({ error: 'Activity entry could not be recorded.' });
+    }
+});
+
+router.post('/reports/pdf', async (req, res) => {
+    try {
+        const result = await saveReportPdf(req.body);
+        res.status(201).json(result);
+    } catch (err) {
+        console.error('[admin] report PDF could not be saved on the printer server:', err.message);
+        res.status(502).json({ error: 'Report PDF could not be saved on the printer server.', details: err.message });
+    }
+});
 
 const queueNumber = (orderId) => 'A' + String(orderId).padStart(3, '0').slice(-3);
 const imageUrl = (name) => name ? `/images/${name}` : null;
@@ -40,6 +85,27 @@ const imageUpload = multer({
         callback(null, true);
     },
 });
+
+const menuSizeNames = new Map([['tall', 'Tall'], ['grande', 'Grande']]);
+function normalizeMenuVariantPrices(sizes, fallbackPrices) {
+    const entries = Array.isArray(sizes)
+        ? sizes
+        : Object.entries(fallbackPrices || {}).map(([size, price]) => ({ size, price }));
+    const normalized = [];
+    const seen = new Set();
+    for (const entry of entries) {
+        const size = menuSizeNames.get(String(entry?.size || '').trim().toLowerCase());
+        const price = Number(entry?.price);
+        if (!size || !Number.isFinite(price) || price < 0 || seen.has(size)) {
+            const error = new Error('Each menu size must be unique and have a valid non-negative price.');
+            error.status = 400;
+            throw error;
+        }
+        seen.add(size);
+        normalized.push({ size, price });
+    }
+    return normalized;
+}
 
 router.get('/settings', async (_req, res) => {
     try {
@@ -67,23 +133,23 @@ router.get('/overview', async (req, res) => {
     const intervalQueries = {
         day: {
             key: 'HOUR(created_at)',
-            where: 'DATE(created_at) = CURRENT_DATE()',
+            where: 'DATE(o.created_at) = CURRENT_DATE()',
         },
         yesterday: {
             key: 'HOUR(created_at)',
-            where: 'DATE(created_at) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)',
+            where: 'DATE(o.created_at) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)',
         },
         week: {
             key: "DATE_FORMAT(created_at, '%Y-%m-%d')",
-            where: 'created_at >= CURRENT_DATE() - INTERVAL 6 DAY AND created_at < CURRENT_DATE() + INTERVAL 1 DAY',
+            where: 'o.created_at >= CURRENT_DATE() - INTERVAL 6 DAY AND o.created_at < CURRENT_DATE() + INTERVAL 1 DAY',
         },
         month: {
             key: "DATE_FORMAT(created_at, '%Y-%m-%d')",
-            where: 'YEAR(created_at) = YEAR(CURRENT_DATE()) AND MONTH(created_at) = MONTH(CURRENT_DATE())',
+            where: 'YEAR(o.created_at) = YEAR(CURRENT_DATE()) AND MONTH(o.created_at) = MONTH(CURRENT_DATE())',
         },
         year: {
             key: "DATE_FORMAT(created_at, '%Y-%m')",
-            where: 'YEAR(created_at) = YEAR(CURRENT_DATE())',
+            where: 'YEAR(o.created_at) = YEAR(CURRENT_DATE())',
         },
     };
     if (!intervalQueries[interval]) {
@@ -98,10 +164,8 @@ router.get('/overview', async (req, res) => {
                 COUNT(order_id) AS totalOrders,
                 COALESCE(AVG(CASE WHEN status != 'VOIDED' THEN total_price END), 0) AS averageOrderValue,
                 COALESCE(SUM(CASE WHEN status IN ('PENDING', 'VERIFIED', 'PREPARING') THEN 1 ELSE 0 END), 0) AS inProgressOrders,
-                COALESCE(SUM(CASE WHEN status = 'READY' THEN 1 ELSE 0 END), 0) AS completedOrders,
-                COALESCE(SUM(CASE WHEN status = 'VOIDED' THEN 1 ELSE 0 END), 0) AS voidedOrders,
-                COALESCE(SUM(CASE WHEN status != 'VOIDED' AND order_type = 'Dine-in' THEN 1 ELSE 0 END), 0) AS dineInOrders,
-                COALESCE(SUM(CASE WHEN status != 'VOIDED' AND order_type = 'Take-out' THEN 1 ELSE 0 END), 0) AS takeOutOrders
+                COALESCE(SUM(CASE WHEN status IN ('READY', 'SERVED') THEN 1 ELSE 0 END), 0) AS completedOrders,
+                COALESCE(SUM(CASE WHEN status = 'VOIDED' THEN 1 ELSE 0 END), 0) AS voidedOrders
             FROM orders
             WHERE DATE(created_at) = CURRENT_DATE()
         `);
@@ -122,6 +186,15 @@ router.get('/overview', async (req, res) => {
         const ordersDelta = totalOrders - yesterdayOrders;
         const salesDeltaPct = yesterdaySales ? (salesDelta / yesterdaySales) * 100 : (todaySales > 0 ? 100 : 0);
         const ordersDeltaPct = yesterdayOrders ? (ordersDelta / yesterdayOrders) * 100 : (totalOrders > 0 ? 100 : 0);
+
+        const [intervalStats] = await db.query(`
+            SELECT
+                COUNT(CASE WHEN status != 'VOIDED' THEN order_id END) AS transactions,
+                COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS sales,
+                COALESCE(AVG(CASE WHEN status != 'VOIDED' THEN total_price END), 0) AS averageOrderValue
+            FROM orders o
+            WHERE ${intervalQueries[interval].where}
+        `);
 
         // Top selling products for the selected interval
         const [topProducts] = await db.query(`
@@ -144,7 +217,7 @@ router.get('/overview', async (req, res) => {
                    COALESCE(SUM(o.total_price), 0) AS sales
             FROM orders o
             LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
-            WHERE o.status != 'VOIDED' AND DATE(o.created_at) = CURRENT_DATE()
+            WHERE o.status != 'VOIDED' AND ${intervalQueries[interval].where}
             GROUP BY method
             ORDER BY sales DESC
         `);
@@ -198,9 +271,9 @@ router.get('/overview', async (req, res) => {
         const timelineQuery = intervalQueries[interval];
         const [timelineRows] = await db.query(`
             SELECT ${timelineQuery.key} AS period_key,
-                   COUNT(CASE WHEN status != 'VOIDED' THEN order_id END) AS orders,
-                   COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS sales
-            FROM orders
+                   COUNT(CASE WHEN o.status != 'VOIDED' THEN o.order_id END) AS orders,
+                   COALESCE(SUM(CASE WHEN o.status != 'VOIDED' THEN o.total_price ELSE 0 END), 0) AS sales
+            FROM orders o
             WHERE ${timelineQuery.where}
             GROUP BY period_key
             ORDER BY period_key ASC
@@ -273,6 +346,11 @@ router.get('/overview', async (req, res) => {
         res.json({
             todaySales,
             totalOrders,
+            intervalSummary: {
+                sales: Number(intervalStats[0].sales),
+                transactions: Number(intervalStats[0].transactions),
+                averageOrderValue: Number(intervalStats[0].averageOrderValue),
+            },
             salesDelta,
             ordersDelta,
             salesDeltaPct,
@@ -281,8 +359,6 @@ router.get('/overview', async (req, res) => {
             inProgressOrders: Number(todayStats[0].inProgressOrders),
             completedOrders: Number(todayStats[0].completedOrders),
             voidedOrders: Number(todayStats[0].voidedOrders),
-            dineInOrders: Number(todayStats[0].dineInOrders),
-            takeOutOrders: Number(todayStats[0].takeOutOrders),
             bestSeller,
             peakTime,
             topProducts: topProducts.map(p => ({
@@ -310,8 +386,9 @@ router.get('/transactions', async (req, res) => {
     try {
         await ensureAuditTable();
         const [orders] = await db.query(`
-            SELECT o.order_id, o.subtotal, o.total_price, o.order_type, o.created_at, o.status,
+            SELECT o.order_id, o.subtotal, o.total_price, o.created_at, o.status,
                    m.payment_method, m.payment_amount, m.discount_type, m.discount_amount,
+                   m.vat_exempt_amount, m.discount_details,
                    m.void_reason, m.is_walkin, m.updated_at
             FROM orders o
             LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
@@ -361,13 +438,25 @@ router.get('/transactions', async (req, res) => {
                 auditLogs,
                 total: Number(o.total_price),
                 subtotal: Number(o.subtotal),
-                orderType: o.order_type,
-                amountChange: o.payment_amount ? Math.max(0, Number(o.payment_amount) - Number(o.total_price)) : 0,
+                amountChange: o.payment_amount
+                    ? Math.max(0, Number(o.payment_amount) - Number(o.total_price)
+                        + Number(o.vat_exempt_amount || 0) + Number(o.discount_amount || 0))
+                    : 0,
+                paymentAmount: o.payment_amount == null ? null : Number(o.payment_amount),
                 paymentMethod: o.payment_method || (o.is_walkin ? 'Cash' : 'GCash'),
-                status: o.status === 'VERIFIED' ? 'Completed' : (o.status === 'VOIDED' ? 'Void' : (o.status === 'READY' ? 'Completed' : o.status)),
+                status: o.status === 'VERIFIED' ? 'Completed' : (o.status === 'VOIDED' ? 'Void' : (['READY', 'SERVED'].includes(o.status) ? 'Completed' : o.status)),
                 rawStatus: o.status,
                 timeServed: o.updated_at || o.created_at,
-                discount: o.discount_type ? { type: o.discount_type, amount: Number(o.discount_amount || 0) } : null,
+                discount: o.discount_type ? {
+                    type: o.discount_type,
+                    amount: Number(o.discount_amount || 0),
+                    vatExemptAmount: Number(o.vat_exempt_amount || 0),
+                    details: o.discount_details == null
+                        ? null
+                        : typeof o.discount_details === 'string'
+                            ? JSON.parse(o.discount_details)
+                            : o.discount_details,
+                } : null,
                 voidReason: o.void_reason ? { type: o.void_reason } : null
             };
         });
@@ -383,11 +472,13 @@ router.get('/menu', async (req, res) => {
     try {
         const [rows] = await db.query(`
             SELECT p.product_id, p.name, p.description, p.image_url, p.is_available, c.category_name,
-                   pv.variant_id, pv.size_name, pv.price
+                   p.bundle_quantity, pv.variant_id, pv.size_name, pv.price
             FROM products p
             JOIN product_variants pv ON pv.product_id = p.product_id
             JOIN categories c ON c.category_id = p.category_id
-            ORDER BY p.product_id, pv.price
+            WHERE pv.is_available = TRUE
+              AND (p.bundle_quantity = 1 OR pv.size_name = 'Tall')
+            ORDER BY p.product_id, CASE pv.size_name WHEN 'Tall' THEN 0 WHEN 'Grande' THEN 1 ELSE 2 END
         `);
 
         const map = new Map();
@@ -400,14 +491,15 @@ router.get('/menu', async (req, res) => {
                     image: r.image_url,
                     available: Boolean(r.is_available),
                     category: r.category_name,
-                    price: { tall: 0, grande: 0 },
+                    bundleQuantity: Number(r.bundle_quantity) || 1,
+                    price: {},
                     sizes: []
                 });
             }
             const item = map.get(r.product_id);
-            if (r.size_name.toLowerCase() === 'tall') item.price.tall = Number(r.price);
-            if (r.size_name.toLowerCase() === 'grande') item.price.grande = Number(r.price);
-            item.sizes.push({ variantId: r.variant_id, size: r.size_name, price: Number(r.price) });
+            const price = Number(r.price);
+            item.price[r.size_name.toLowerCase()] = price;
+            item.sizes.push({ variantId: r.variant_id, size: r.size_name, price });
         }
 
         res.json(Array.from(map.values()));
@@ -489,9 +581,21 @@ router.patch('/menu/:id/toggle', async (req, res) => {
 
 // PUT /api/admin/menu/:id — Update product info and prices
 router.put('/menu/:id', async (req, res) => {
-    const id = req.params.id;
-    const { name, description, category, image, price, available } = req.body;
     try {
+        const id = req.params.id;
+        const { name, description, category, image, price, sizes, available } = req.body;
+        const variantPrices = normalizeMenuVariantPrices(sizes, price);
+        const [products] = await db.query(`SELECT product_id FROM products WHERE product_id = ?`, [id]);
+        if (!products.length) return res.status(404).json({ error: 'Product not found' });
+        const [variants] = await db.query(
+            `SELECT variant_id, size_name FROM product_variants WHERE product_id = ?`,
+            [id]
+        );
+        const variantsBySize = new Map(variants.map(variant => [variant.size_name.toLowerCase(), variant]));
+        if (variantPrices.some(variant => !variantsBySize.has(variant.size.toLowerCase()))) {
+            return res.status(400).json({ error: 'A selected size is not available for this product.' });
+        }
+
         // Find category id
         const [cats] = await db.query(`SELECT category_id FROM categories WHERE category_name = ?`, [category]);
         const catId = cats.length ? cats[0].category_id : 1;
@@ -502,24 +606,31 @@ router.put('/menu/:id', async (req, res) => {
             WHERE product_id = ?
         `, [name, description, catId, image, available ? 1 : 0, id]);
 
-        if (price) {
-            if (price.tall != null) {
-                await db.query(`UPDATE product_variants SET price = ? WHERE product_id = ? AND size_name = 'Tall'`, [price.tall, id]);
-            }
-            if (price.grande != null) {
-                await db.query(`UPDATE product_variants SET price = ? WHERE product_id = ? AND size_name = 'Grande'`, [price.grande, id]);
-            }
+        for (const variant of variantPrices) {
+            await db.query(
+                `UPDATE product_variants SET price = ? WHERE variant_id = ? AND product_id = ?`,
+                [variant.price, variantsBySize.get(variant.size.toLowerCase()).variant_id, id]
+            );
         }
         res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ error: 'Update product failed', details: err.message });
+        res.status(err.status || 500).json({ error: 'Update product failed', details: err.message });
     }
 });
 
 // POST /api/admin/menu — Add new product and variants
 router.post('/menu', async (req, res) => {
-    const { name, description, category, image, price, available = true } = req.body;
     try {
+        const { name, description, category, image, price, available = true } = req.body;
+        const sizes = req.body.sizes || [
+            { size: 'Tall', price: price?.tall ?? 120 },
+            { size: 'Grande', price: price?.grande ?? 145 },
+        ];
+        const variantPrices = normalizeMenuVariantPrices(sizes, price);
+        if (!variantPrices.length) {
+            return res.status(400).json({ error: 'Add at least one menu size and price.' });
+        }
+
         const [cats] = await db.query(`SELECT category_id FROM categories WHERE category_name = ?`, [category]);
         const catId = cats.length ? cats[0].category_id : 1;
 
@@ -529,18 +640,16 @@ router.post('/menu', async (req, res) => {
         `, [catId, name, description, image || 'MangoRoyal.png', available ? 1 : 0]);
 
         const prodId = prod.insertId;
-        const tallPrice = (price && price.tall) || 120;
-        const grandePrice = (price && price.grande) || 145;
-
-        await db.query(`
-            INSERT INTO product_variants (product_id, size_name, price) VALUES
-            (?, 'Tall', ?),
-            (?, 'Grande', ?)
-        `, [prodId, tallPrice, prodId, grandePrice]);
+        const values = variantPrices.map(() => '(?, ?, ?)').join(', ');
+        const params = variantPrices.flatMap(variant => [prodId, variant.size, variant.price]);
+        await db.query(
+            `INSERT INTO product_variants (product_id, size_name, price) VALUES ${values}`,
+            params
+        );
 
         res.json({ success: true, product_id: prodId });
     } catch (err) {
-        res.status(500).json({ error: 'Add product failed', details: err.message });
+        res.status(err.status || 500).json({ error: 'Add product failed', details: err.message });
     }
 });
 
@@ -566,8 +675,8 @@ router.post('/assistant', async (req, res) => {
     if (!userMessage) {
         return res.status(400).json({ error: 'message is required.' });
     }
-    if (userMessage.length > 600) {
-        return res.status(400).json({ error: 'Message too long (max 600 characters).' });
+    if (userMessage.length > 6000) {
+        return res.status(400).json({ error: 'Message too long (max 6000 characters).' });
     }
 
     // ── Build live dashboard context from the DB (same queries as /overview) ──
@@ -668,7 +777,8 @@ ${context}`;
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage }
         ],
-        max_tokens: 256,
+        max_completion_tokens: 512,
+        reasoning_effort: 'low',
         temperature: 0.4,
     });
 

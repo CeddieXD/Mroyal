@@ -26,9 +26,17 @@ The kiosk server proxies `/api` requests to the backend on port 3000 by default,
 
 The customer kiosk launcher enables live reload for local development: save a file under `public` and open kiosk pages refresh automatically. The development server disables the kiosk service worker to prevent cached files from masking edits.
 
+## Order acknowledgement printing
+
+After Place Order, the kiosk automatically sends an acknowledgement ticket to
+the PC's printer server. The compact ticket centers the order number in large
+bold type, with the cashier instruction and a thank-you; it has no order items,
+prices, or totals. If printing fails, the kiosk keeps the order screen open and
+shows the same content as a digital ticket, with an option to retry printing.
+
 ## Inactivity reset
 
-After 3 minutes without touch, key input, or cursor movement during an order, the kiosk replaces the current screen with a 10-second countdown prompt. Interacting with the kiosk resumes the order; if the countdown reaches zero, the cart is cleared and the kiosk returns to the start screen. Orders are take-out only.
+After 3 minutes without touch, key input, or cursor movement during an order, the kiosk replaces the current screen with a 10-second countdown prompt. Interacting with the kiosk resumes the order; if the countdown reaches zero, the cart is cleared and the kiosk returns to the start screen.
 
 ## Add-ons and toppings
 

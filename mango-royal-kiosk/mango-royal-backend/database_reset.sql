@@ -161,7 +161,7 @@ CREATE TABLE orders (
     subtotal DECIMAL(10,2) NOT NULL,
     delivery_fee DECIMAL(10,2) DEFAULT 10.00,
     total_price DECIMAL(10,2) NOT NULL,
-    order_type ENUM('Dine-in','Take-out') NOT NULL,
+    order_type VARCHAR(20) NOT NULL DEFAULT 'Standard',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(32) DEFAULT 'PENDING',
 
@@ -278,6 +278,23 @@ CREATE TABLE order_item_audit_logs (
     INDEX idx_order_item_audit_order_time (order_id, created_at),
     INDEX idx_order_item_audit_variant (order_id, variant_id),
     FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+-- =========================================
+-- TABLE: staff_activity_logs
+-- =========================================
+
+CREATE TABLE staff_activity_logs (
+    activity_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    display_name VARCHAR(150) NOT NULL,
+    `role` VARCHAR(20) NOT NULL,
+    `action` VARCHAR(100) NOT NULL,
+    details VARCHAR(500) NOT NULL,
+    category VARCHAR(32) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_staff_activity_created (created_at),
+    INDEX idx_staff_activity_user (username, created_at)
 );
 
 

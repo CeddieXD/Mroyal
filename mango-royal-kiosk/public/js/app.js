@@ -109,7 +109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const goReview = () => {
         hideAll();
-        review.show({ items: cart.getSnapshot(), orderType: 'Take Out' });
+        review.show({ items: cart.getSnapshot() });
         startIdleTimer();
     };
 
@@ -120,9 +120,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         startIdleTimer();
     };
 
-    const goQueue = (queueNumber) => {
+    const goQueue = (queueNumber, orderId, printToken, acknowledgement) => {
         hideAll();
-        queue.show({ queueNumber });
+        queue.show({ queueNumber, orderId, printToken, acknowledgement });
         // Idle timer paused during queue screen — its own countdown returns to attract
         clearIdleTimer();
     };
@@ -203,7 +203,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = cart.getSnapshot();
         const payload = {
             session_id: sessionId,
-            order_type: 'Take-out',
             items: items.map(i => ({
                 variant_id: i.variant_id,
                 quantity: i.quantity,
@@ -230,7 +229,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const qn = j.queue_number || ('A' + String(j.order_id || 0).padStart(3, '0').slice(-3));
             cart.clear();
             sessionId = null;
-            goQueue(qn);
+            goQueue(qn, j.order_id, j.acknowledgement_print_token, j.acknowledgement);
         } catch (err) {
             console.error(err);
             alert('Sorry, order could not be placed. Please try again or see the counter.');
@@ -248,6 +247,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         onProductClick: (imgEl, product) => detail.morphForward(imgEl, product),
         onStartAgain: () => goAttract(),
     });
+    menu.preload();
 
     const cart = initCart({
         onCheckout: () => goReview(),

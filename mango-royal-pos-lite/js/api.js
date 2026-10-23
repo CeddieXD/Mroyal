@@ -3,8 +3,8 @@ export const API_HOST = window.POS_API_BASE || `${window.location.protocol}//${w
 export const API_BASE = API_HOST + '/api/pos';
 export const imageUrl = (p) => p ? (p.startsWith('http') ? p : API_HOST + p) : null;
 
-async function req(path, opts = {}) {
-    const res = await fetch(API_BASE + path, {
+async function req(path, opts = {}, base = API_BASE) {
+    const res = await fetch(base + path, {
         headers: { 'Content-Type': 'application/json' },
         ...opts,
     });
@@ -72,11 +72,16 @@ function safeJson(s) { try { return JSON.parse(s); } catch { return {}; } }
 
 export const api = {
     orders: (status) => req(`/orders?status=${encodeURIComponent(status)}`),
+    posSettings: () => req('/settings'),
+    endOfDayReceipt: () => req('/end-of-day-receipt', { method: 'POST' }),
     menu: () => req('/menu'),
+    addOns: () => req('/api/add-ons', {}, API_HOST),
     verify: (id, payload) => req(`/orders/${id}/verify`, { method: 'POST', body: JSON.stringify(payload) }),
-    void:   (id, reason)  => req(`/orders/${id}/void`,   { method: 'POST', body: JSON.stringify({ reason }) }),
+    print: (id) => req(`/orders/${id}/print`, { method: 'POST' }),
+    void:   (id, reason, pendingOnly = false) =>
+        req(`/orders/${id}/void`, { method: 'POST', body: JSON.stringify({ reason, pendingOnly }) }),
     reopen: (id)          => req(`/orders/${id}/reopen`, { method: 'POST' }),
     edit:   (id, items)   => req(`/orders/${id}`, { method: 'PATCH', body: JSON.stringify({ items }) }),
-    walkin: (items, orderType = 'Dine-in') =>
-        req('/orders/walkin', { method: 'POST', body: JSON.stringify({ items, orderType }) }),
+    walkin: (items) =>
+        req('/orders/walkin', { method: 'POST', body: JSON.stringify({ items }) }),
 };

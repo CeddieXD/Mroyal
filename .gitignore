@@ -17,6 +17,7 @@
 **/coverage/
 **/dist/
 **/build/
+**/mango-royal-printer-server/reports/
 *.log
 Thumbs.db
 Desktop.ini
