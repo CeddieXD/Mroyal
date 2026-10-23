@@ -77,8 +77,10 @@ async function ensureMetaTable() {
         }
     }
 }
-const metaTableReady = ensureMetaTable();
-metaTableReady.catch(err => console.error('[pos] meta table init failed:', err.message));
+const metaTableReady = ensureMetaTable().catch(err => {
+    console.error('[pos] meta table init failed:', err.message);
+    throw err;
+});
 
 // Load orders + items for the given status filter
 async function loadOrders(status) {

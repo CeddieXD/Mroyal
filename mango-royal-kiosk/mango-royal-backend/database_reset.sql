@@ -8,12 +8,25 @@ COLLATE utf8mb4_0900_ai_ci;
 
 USE mangoroyalkiosk;
 
+SET FOREIGN_KEY_CHECKS = 0;
+
+DROP TABLE IF EXISTS order_item_audit_logs;
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS pos_order_meta;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS ai_interactions;
+DROP TABLE IF EXISTS product_variants;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS admin_settings;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
 
 -- =========================================
 -- TABLE: categories
 -- =========================================
-
-DROP TABLE IF EXISTS categories;
 
 CREATE TABLE categories (
     category_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -115,11 +128,6 @@ INSERT INTO product_variants VALUES
 -- TABLE: orders
 -- =========================================
 
-DROP TABLE IF EXISTS order_item_audit_logs;
-DROP TABLE IF EXISTS order_items;
-DROP TABLE IF EXISTS pos_order_meta;
-DROP TABLE IF EXISTS orders;
-
 CREATE TABLE orders (
     order_id INT AUTO_INCREMENT PRIMARY KEY,
     session_id INT,
@@ -154,6 +162,67 @@ CREATE TABLE order_items (
     FOREIGN KEY (variant_id)
     REFERENCES product_variants(variant_id)
 );
+
+
+-- =========================================
+-- SAMPLE DATA: Today and Tomorrow
+-- =========================================
+
+WITH RECURSIVE date_range AS (
+    SELECT DATE('2026-10-20') AS day_date
+    UNION ALL
+    SELECT DATE_ADD(day_date, INTERVAL 1 DAY)
+    FROM date_range
+    WHERE day_date < CURRENT_DATE()
+),
+order_seed AS (
+    SELECT 0 AS seq
+    UNION ALL
+    SELECT seq + 1 FROM order_seed WHERE seq < 299
+)
+INSERT INTO sessions (device_id, status, created_at)
+SELECT
+    CONCAT('KIOSK_', MOD(os.seq, 6) + 1) AS device_id,
+    'completed' AS status,
+    TIMESTAMPADD(HOUR, MOD(os.seq, 16) + 8, dr.day_date) AS created_at
+FROM date_range dr
+CROSS JOIN order_seed os;
+
+INSERT INTO orders (session_id, subtotal, delivery_fee, total_price, order_type, created_at, status)
+SELECT
+    s.session_id,
+    ROUND((120 + (MOD(s.session_id, 17) * 9.5) + (MOD(s.session_id, 5) * 11)) * (1 + ((DAYOFYEAR(s.created_at) % 5) * 0.18)), 2) AS subtotal,
+    CASE WHEN MOD(s.session_id, 3) = 0 THEN 10.00 ELSE 0.00 END AS delivery_fee,
+    ROUND((120 + (MOD(s.session_id, 17) * 9.5) + (MOD(s.session_id, 5) * 11)) * (1 + ((DAYOFYEAR(s.created_at) % 5) * 0.18)) + (CASE WHEN MOD(s.session_id, 3) = 0 THEN 10.00 ELSE 0.00 END) + ((DAYOFYEAR(s.created_at) % 4) * 8), 2) AS total_price,
+    CASE WHEN MOD(s.session_id, 2) = 0 THEN 'Dine-in' ELSE 'Take-out' END AS order_type,
+    s.created_at,
+    CASE MOD(s.session_id, 6)
+        WHEN 0 THEN 'READY'
+        WHEN 1 THEN 'PREPARING'
+        WHEN 2 THEN 'VERIFIED'
+        WHEN 3 THEN 'PENDING'
+        WHEN 4 THEN 'READY'
+        ELSE 'PREPARING'
+    END AS status
+FROM sessions s
+WHERE s.created_at >= DATE('2026-10-20')
+  AND s.created_at < TIMESTAMPADD(DAY, 1, CURRENT_DATE());
+
+INSERT INTO order_items (order_id, variant_id, quantity, price_at_purchase)
+SELECT
+    o.order_id,
+    1 + MOD((o.order_id + item_idx.idx * 3), 28) AS variant_id,
+    CASE WHEN item_idx.idx = 0 THEN 1 + MOD(o.order_id, 2) ELSE 1 END AS quantity,
+    pv.price AS price_at_purchase
+FROM orders o
+JOIN (
+    SELECT 0 AS idx
+    UNION ALL SELECT 1
+    UNION ALL SELECT 2
+) AS item_idx
+JOIN product_variants pv ON pv.variant_id = 1 + MOD((o.order_id + item_idx.idx * 3), 28)
+WHERE o.created_at >= DATE('2026-10-20')
+  AND o.created_at < TIMESTAMPADD(DAY, 1, CURRENT_DATE());
 
 
 -- =========================================

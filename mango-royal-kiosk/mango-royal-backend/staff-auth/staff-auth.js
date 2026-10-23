@@ -7,6 +7,28 @@
     const apiBase = config.apiBase.replace(/\/+$/, '');
     const sessionKey = config.sessionKey;
     const originalFetch = window.fetch.bind(window);
+    const activityKey = 'mango-royal-admin-activity';
+    window.MangoRoyalAdminAudit = window.MangoRoyalAdminAudit || {
+        currentUserName: '',
+        recordActivity({ user = 'User', action, details, category = 'System' }) {
+            const entry = {
+                id: Date.now() + Math.random(),
+                timestamp: new Date().toISOString(),
+                user,
+                action,
+                details,
+                category,
+            };
+            try {
+                const saved = JSON.parse(localStorage.getItem(activityKey) || '[]');
+                const next = Array.isArray(saved) ? saved : [];
+                next.unshift(entry);
+                localStorage.setItem(activityKey, JSON.stringify(next.slice(0, 200)));
+            } catch (error) {
+                console.warn('Could not persist activity log entry:', error);
+            }
+        }
+    };
     let token = '';
     let expiredRedirectStarted = false;
 
@@ -109,6 +131,16 @@
                 }
                 token = result.token;
                 sessionStorage.setItem(sessionKey, token);
+                if (window.MangoRoyalAdminAudit?.recordActivity) {
+                    const userName = result.user?.displayName || form.elements.username.value || 'User';
+                    window.MangoRoyalAdminAudit.currentUserName = userName;
+                    window.MangoRoyalAdminAudit.recordActivity({
+                        user: userName,
+                        action: 'Signed in',
+                        details: `${userName} signed in to ${appLabel()}.`,
+                        category: 'Users'
+                    });
+                }
                 root.remove();
                 await startApp(result.user);
             } catch (errorValue) {
@@ -159,8 +191,17 @@
 
     async function logout() {
         const activeToken = token;
+        const loggedUser = window.MangoRoyalAdminAudit?.currentUserName || 'User';
         token = '';
         sessionStorage.removeItem(sessionKey);
+        if (window.MangoRoyalAdminAudit?.recordActivity) {
+            window.MangoRoyalAdminAudit.recordActivity({
+                user: loggedUser,
+                action: 'Signed out',
+                details: `${loggedUser} signed out from ${config.appLabel || 'the staff app'}.`,
+                category: 'Users'
+            });
+        }
         if (activeToken) {
             try {
                 await originalFetch(`${apiBase}/api/auth/logout`, {
@@ -185,6 +226,16 @@
                 });
                 const result = await response.json().catch(() => ({}));
                 if (response.ok && result.user?.role === config.role) {
+                    if (window.MangoRoyalAdminAudit?.recordActivity) {
+                        const userName = result.user?.displayName || result.user?.username || 'User';
+                        window.MangoRoyalAdminAudit.currentUserName = userName;
+                        window.MangoRoyalAdminAudit.recordActivity({
+                            user: userName,
+                            action: 'Signed in',
+                            details: `${userName} signed in to ${config.appLabel || 'the staff app'}.`,
+                            category: 'Users'
+                        });
+                    }
                     await startApp(result.user);
                     return;
                 }

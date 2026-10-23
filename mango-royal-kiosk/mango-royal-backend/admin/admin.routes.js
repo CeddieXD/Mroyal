@@ -3,6 +3,7 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const multer = require('multer');
 const db = require('../config/db');
 const { ensureAuditTable } = require('../audit-logs');
@@ -68,6 +69,10 @@ router.get('/overview', async (req, res) => {
             key: 'HOUR(created_at)',
             where: 'DATE(created_at) = CURRENT_DATE()',
         },
+        yesterday: {
+            key: 'HOUR(created_at)',
+            where: 'DATE(created_at) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)',
+        },
         week: {
             key: "DATE_FORMAT(created_at, '%Y-%m-%d')",
             where: 'created_at >= CURRENT_DATE() - INTERVAL 6 DAY AND created_at < CURRENT_DATE() + INTERVAL 1 DAY',
@@ -101,17 +106,31 @@ router.get('/overview', async (req, res) => {
             WHERE DATE(created_at) = CURRENT_DATE()
         `);
 
+        const [yesterdayStats] = await db.query(`
+            SELECT
+                COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS yesterdaySales,
+                COUNT(order_id) AS yesterdayOrders
+            FROM orders
+            WHERE DATE(created_at) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+        `);
+
         const todaySales = Number(todayStats[0].todaySales);
         const totalOrders = Number(todayStats[0].totalOrders);
+        const yesterdaySales = Number(yesterdayStats[0].yesterdaySales || 0);
+        const yesterdayOrders = Number(yesterdayStats[0].yesterdayOrders || 0);
+        const salesDelta = todaySales - yesterdaySales;
+        const ordersDelta = totalOrders - yesterdayOrders;
+        const salesDeltaPct = yesterdaySales ? (salesDelta / yesterdaySales) * 100 : (todaySales > 0 ? 100 : 0);
+        const ordersDeltaPct = yesterdayOrders ? (ordersDelta / yesterdayOrders) * 100 : (totalOrders > 0 ? 100 : 0);
 
-        // Top selling products
+        // Top selling products for the selected interval
         const [topProducts] = await db.query(`
             SELECT p.name, SUM(oi.quantity) as sold, SUM(oi.quantity * oi.price_at_purchase) as revenue
             FROM order_items oi
             JOIN product_variants pv ON pv.variant_id = oi.variant_id
             JOIN products p ON p.product_id = pv.product_id
             JOIN orders o ON o.order_id = oi.order_id
-            WHERE o.status != 'VOIDED' AND DATE(o.created_at) = CURRENT_DATE()
+            WHERE o.status != 'VOIDED' AND ${intervalQueries[interval].where}
             GROUP BY p.product_id, p.name
             ORDER BY sold DESC
             LIMIT 5
@@ -141,6 +160,41 @@ router.get('/overview', async (req, res) => {
             ORDER BY hr ASC
         `);
 
+        const [dailyTrendRows] = await db.query(`
+            SELECT DATE(created_at) AS day,
+                   COUNT(CASE WHEN status != 'VOIDED' THEN order_id END) AS orders,
+                   COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS sales
+            FROM orders
+            WHERE DATE(created_at) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY) AND CURRENT_DATE()
+            GROUP BY DATE(created_at)
+            ORDER BY DATE(created_at) ASC
+        `);
+
+        const formatLocalDateKey = date => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const dailyTrend = Array.from({ length: 3 }, (_, index) => {
+            const date = new Date();
+            date.setDate(date.getDate() - (2 - index));
+            const key = formatLocalDateKey(date);
+            const match = dailyTrendRows.find(row => {
+                const rowDay = row.day instanceof Date
+                    ? formatLocalDateKey(new Date(row.day.getTime() - row.day.getTimezoneOffset() * 60000))
+                    : String(row.day).slice(0, 10);
+                return rowDay === key;
+            });
+            return {
+                date: key,
+                sales: match ? Number(match.sales) : 0,
+                orders: match ? Number(match.orders) : 0,
+                label: date.toLocaleString('en-US', { month: 'short', day: 'numeric' })
+            };
+        });
+
         const timelineQuery = intervalQueries[interval];
         const [timelineRows] = await db.query(`
             SELECT ${timelineQuery.key} AS period_key,
@@ -158,7 +212,7 @@ router.get('/overview', async (req, res) => {
         const now = new Date();
         const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
         let salesTimeline;
-        if (interval === 'day') {
+        if (interval === 'day' || interval === 'yesterday') {
             salesTimeline = Array.from({ length: 24 }, (_, hour) => ({
                 label: `${hour % 12 || 12} ${hour >= 12 ? 'PM' : 'AM'}`,
                 key: String(hour),
@@ -219,6 +273,10 @@ router.get('/overview', async (req, res) => {
         res.json({
             todaySales,
             totalOrders,
+            salesDelta,
+            ordersDelta,
+            salesDeltaPct,
+            ordersDeltaPct,
             averageOrderValue: Number(todayStats[0].averageOrderValue),
             inProgressOrders: Number(todayStats[0].inProgressOrders),
             completedOrders: Number(todayStats[0].completedOrders),
@@ -238,6 +296,7 @@ router.get('/overview', async (req, res) => {
                 sales: Number(row.sales),
             })),
             hourly: hourlyData,
+            dailyTrend,
             salesTimeline,
             salesInterval: interval
         });
@@ -480,16 +539,185 @@ router.post('/menu', async (req, res) => {
     }
 });
 
-// DELETE /api/admin/menu/:id — Remove product
+// Archive-only endpoint: item is not permanently removed.
 router.delete('/menu/:id', async (req, res) => {
     const id = req.params.id;
     try {
-        await db.query(`DELETE FROM product_variants WHERE product_id = ?`, [id]);
-        await db.query(`DELETE FROM products WHERE product_id = ?`, [id]);
-        res.json({ success: true });
+        await db.query(`UPDATE products SET is_available = 0 WHERE product_id = ?`, [id]);
+        res.json({ success: true, archived: true });
     } catch (err) {
-        res.status(500).json({ error: 'Delete failed', details: err.message });
+        res.status(500).json({ error: 'Archive failed', details: err.message });
     }
+});
+
+// POST /api/admin/assistant — Proxy to Groq AI with live dashboard context
+router.post('/assistant', async (req, res) => {
+    const apiKey = process.env.AI_API;
+    if (!apiKey) {
+        return res.status(503).json({ error: 'AI assistant is not configured. Add AI_API to the backend .env file.' });
+    }
+
+    const userMessage = String(req.body?.message || '').trim();
+    if (!userMessage) {
+        return res.status(400).json({ error: 'message is required.' });
+    }
+    if (userMessage.length > 600) {
+        return res.status(400).json({ error: 'Message too long (max 600 characters).' });
+    }
+
+    // ── Build live dashboard context from the DB (same queries as /overview) ──
+    let context = '';
+    try {
+        const [todayStats] = await db.query(`
+            SELECT
+                COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS todaySales,
+                COUNT(order_id) AS totalOrders,
+                COALESCE(AVG(CASE WHEN status != 'VOIDED' THEN total_price END), 0) AS averageOrderValue,
+                COALESCE(SUM(CASE WHEN status IN ('PENDING','VERIFIED','PREPARING') THEN 1 ELSE 0 END), 0) AS inProgressOrders,
+                COALESCE(SUM(CASE WHEN status = 'READY' THEN 1 ELSE 0 END), 0) AS completedOrders,
+                COALESCE(SUM(CASE WHEN status = 'VOIDED' THEN 1 ELSE 0 END), 0) AS voidedOrders,
+                COALESCE(SUM(CASE WHEN status != 'VOIDED' AND order_type = 'Dine-in' THEN 1 ELSE 0 END), 0) AS dineInOrders,
+                COALESCE(SUM(CASE WHEN status != 'VOIDED' AND order_type = 'Take-out' THEN 1 ELSE 0 END), 0) AS takeOutOrders
+            FROM orders WHERE DATE(created_at) = CURRENT_DATE()
+        `);
+
+        const [yesterdayStats] = await db.query(`
+            SELECT
+                COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS yesterdaySales,
+                COUNT(order_id) AS yesterdayOrders
+            FROM orders WHERE DATE(created_at) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+        `);
+
+        const [topProducts] = await db.query(`
+            SELECT p.name, SUM(oi.quantity) AS sold,
+                   SUM(oi.quantity * oi.price_at_purchase) AS revenue
+            FROM order_items oi
+            JOIN product_variants pv ON pv.variant_id = oi.variant_id
+            JOIN products p ON p.product_id = pv.product_id
+            JOIN orders o ON o.order_id = oi.order_id
+            WHERE o.status != 'VOIDED' AND DATE(o.created_at) = CURRENT_DATE()
+            GROUP BY p.product_id, p.name ORDER BY sold DESC LIMIT 5
+        `);
+
+        const [hourly] = await db.query(`
+            SELECT HOUR(created_at) AS hr,
+                   COUNT(CASE WHEN status != 'VOIDED' THEN order_id END) AS orders,
+                   COALESCE(SUM(CASE WHEN status != 'VOIDED' THEN total_price ELSE 0 END), 0) AS sales
+            FROM orders WHERE DATE(created_at) = CURRENT_DATE()
+            GROUP BY HOUR(created_at) ORDER BY hr ASC
+        `);
+
+        let peakTime = 'None yet';
+        if (hourly.some(h => Number(h.orders) > 0)) {
+            const maxH = hourly.reduce((p, c) => (Number(c.orders) > Number(p.orders) ? c : p), hourly[0]);
+            const fh = h => `${h % 12 || 12}:00 ${h >= 12 ? 'PM' : 'AM'}`;
+            peakTime = `${fh(Number(maxH.hr))} – ${fh((Number(maxH.hr) + 1) % 24)}`;
+        }
+
+        const peso = n => '₱' + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const t = todayStats[0];
+        const y = yesterdayStats[0];
+
+        context = `
+LIVE MANGO ROYAL DASHBOARD DATA (as of right now, ${new Date().toLocaleString('en-PH')}):
+
+TODAY'S SALES SUMMARY:
+- Total sales (non-voided): ${peso(t.todaySales)}
+- Total orders: ${t.totalOrders}
+- Average order value: ${peso(t.averageOrderValue)}
+- Yesterday's sales: ${peso(y.yesterdaySales)} (${t.totalOrders} vs ${y.yesterdayOrders} orders)
+
+ORDER STATUS:
+- In progress (Pending/Preparing): ${t.inProgressOrders}
+- Completed (Ready): ${t.completedOrders}
+- Voided: ${t.voidedOrders}
+
+ORDER TYPE MIX (non-voided):
+- Dine-in: ${t.dineInOrders}
+- Take-out: ${t.takeOutOrders}
+
+PEAK HOUR: ${peakTime}
+
+TOP PRODUCTS TODAY:
+${topProducts.length
+    ? topProducts.map((p, i) => `  ${i + 1}. ${p.name} — ${p.sold} sold — ${peso(p.revenue)} revenue`).join('\n')
+    : '  No product sales recorded yet today.'
+}
+`.trim();
+    } catch (dbErr) {
+        console.error('[assistant] DB context fetch failed:', dbErr.message);
+        context = 'Live dashboard data is temporarily unavailable. Answer based on general business knowledge for a small mango shake shop.';
+    }
+
+    // ── Call Groq API ──
+    const systemPrompt = `You are Royal Insights, a concise and friendly AI analytics assistant built into the Mango Royal admin dashboard.
+You have access to today's live sales data shown below. Answer the admin's questions using only this data.
+Be brief (2–4 sentences max), direct, and practical. Format numbers in Philippine Peso (₱).
+Do not mention AI, APIs, or that you are a language model. If data is missing, say so plainly.
+
+${context}`;
+
+    const groqPayload = JSON.stringify({
+        model: 'openai/gpt-oss-120b',
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+        ],
+        max_tokens: 256,
+        temperature: 0.4,
+    });
+
+    const groqOptions = {
+        hostname: 'api.groq.com',
+        path: '/openai/v1/chat/completions',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Length': Buffer.byteLength(groqPayload),
+        },
+    };
+
+    const groqReq = https.request(groqOptions, groqRes => {
+        let body = '';
+        groqRes.on('data', chunk => { body += chunk; });
+        groqRes.on('end', () => {
+            try {
+                const parsed = JSON.parse(body);
+                if (parsed.error) {
+                    console.error('[assistant] Groq error:', parsed.error);
+                    return res.status(502).json({ error: 'AI service returned an error. Try again.' });
+                }
+                const reply = parsed.choices?.[0]?.message?.content?.trim();
+                if (!reply) {
+                    return res.status(502).json({ error: 'AI returned an empty response. Try again.' });
+                }
+                res.json({ reply });
+            } catch (parseErr) {
+                console.error('[assistant] Groq parse error:', parseErr.message, body.slice(0, 200));
+                res.status(502).json({ error: 'Could not parse AI response. Try again.' });
+            }
+        });
+    });
+
+    groqReq.on('error', err => {
+        console.error('[assistant] Groq request failed:', err.message);
+        if (!res.headersSent) {
+            res.status(502).json({ error: 'Could not reach the AI service. Check your internet connection.' });
+        }
+    });
+
+    // Safety timeout — abort if Groq hasn't responded in 25 seconds
+    groqReq.setTimeout(25000, () => {
+        console.error('[assistant] Groq request timed out');
+        groqReq.destroy();
+        if (!res.headersSent) {
+            res.status(504).json({ error: 'The AI service took too long to respond. Try again.' });
+        }
+    });
+
+    groqReq.write(groqPayload);
+    groqReq.end();
 });
 
 module.exports = router;

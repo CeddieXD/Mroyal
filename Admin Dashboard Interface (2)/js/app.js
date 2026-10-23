@@ -1,4 +1,4 @@
-/* ===== Mango Royal Admin — Live Functional Client ===== */
+﻿/* ===== Mango Royal Admin — Live Functional Client ===== */
 
 const $  = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
@@ -50,7 +50,7 @@ let overviewData = {
 
 let recentTransactions = [];
 let menuItems = [];
-let salesInterval = 'month';
+let salesInterval = getStoredAdminInterval();
 let overviewRequestId = 0;
 let adminSettings = structuredClone(DEFAULT_ADMIN_SETTINGS);
 let savedAdminSettings = structuredClone(DEFAULT_ADMIN_SETTINGS);
@@ -67,39 +67,243 @@ const categoryLabels = {
 };
 
 let users = [
-    { id:'A-001', name:'John Dela Cruz', email:'john.delacruz@mangoroyal.com', role:'Admin',         status:'Active', lastLogin:new Date() },
-    { id:'C-001', name:'Carlos Reyes',   email:'carlos.reyes@mangoroyal.com',   role:'Cashier',       status:'Active', lastLogin:new Date() },
-    { id:'K-001', name:'Anna Garcia',    email:'anna.garcia@mangoroyal.com',    role:'Kitchen Staff', status:'Active', lastLogin:new Date() },
+    { id:'A-001', name:'John Dela Cruz', email:'john.delacruz@mangoroyal.com', role:'Admin',         status:'Active', lastLogin:new Date(), archived:false },
+    { id:'C-001', name:'Carlos Reyes',   email:'carlos.reyes@mangoroyal.com',   role:'Cashier',       status:'Active', lastLogin:new Date(), archived:false },
+    { id:'K-001', name:'Anna Garcia',    email:'anna.garcia@mangoroyal.com',    role:'Kitchen Staff', status:'Active', lastLogin:new Date(), archived:false },
 ];
+let archivedUsers = [];
+let showArchivedUsers = false;
+
+const ACTIVITY_LOG_STORAGE_KEY = 'mango-royal-admin-activity';
+const MENU_ARCHIVE_STORAGE_KEY = 'mango-royal-menu-archive';
+const activityLogSeed = [
+    { id: 1, timestamp: new Date(Date.now() - 1000 * 60 * 27), user: 'Admin User', action: 'Updated menu item', details: 'Mango Royal price changed from ₱59 to ₱65.', category: 'Menu' },
+    { id: 2, timestamp: new Date(Date.now() - 1000 * 60 * 64), user: 'Admin User', action: 'Toggled item availability', details: 'Fresh Juice set to unavailable for online ordering.', category: 'Menu' },
+    { id: 3, timestamp: new Date(Date.now() - 1000 * 60 * 132), user: 'System', action: 'Report generated', details: 'Daily sales report exported to CSV.', category: 'Reports' },
+    { id: 4, timestamp: new Date(Date.now() - 1000 * 60 * 190), user: 'Admin User', action: 'Updated settings', details: 'Report frequency changed to Daily.', category: 'System' },
+    { id: 5, timestamp: new Date(Date.now() - 1000 * 60 * 340), user: 'Admin User', action: 'Updated user role', details: 'Carlos Reyes assigned to Cashier access.', category: 'Users' },
+    { id: 6, timestamp: new Date(Date.now() - 1000 * 60 * 520), user: 'System', action: 'Order status changed', details: 'Order A771 moved to Completed.', category: 'Transactions' }
+];
+let activityLogs = activityLogSeed.map(log => ({ ...log, timestamp: new Date(log.timestamp) }));
+try {
+    const savedLogs = JSON.parse(localStorage.getItem(ACTIVITY_LOG_STORAGE_KEY) || '[]');
+    if (Array.isArray(savedLogs) && savedLogs.length) {
+        activityLogs = savedLogs.map(log => ({ ...log, timestamp: new Date(log.timestamp) }));
+    }
+} catch (e) {
+    // Ignore localStorage read issues.
+}
+
+function recordActivity({ user = 'Admin User', action, details, category = 'System' }) {
+    const entry = {
+        id: Date.now() + Math.random(),
+        timestamp: new Date(),
+        user,
+        action,
+        details,
+        category
+    };
+    activityLogs.unshift(entry);
+    try {
+        localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLogs.slice(0, 200)));
+    } catch (e) {
+        // Ignore storage restrictions in private browsing or locked-down environments.
+    }
+    if (document.getElementById('view-activity')?.classList.contains('active')) {
+        renderActivityLog();
+    }
+}
+window.MangoRoyalAdminAudit = { currentUserName: '', recordActivity };
 
 /* ---------- Nav ---------- */
 const charts = {};
-$('#sales-interval')?.addEventListener('change', event => {
-    salesInterval = event.target.value;
-    loadOverviewData();
-});
+function triggerDashboardIntervalAnimation() {
+    const dashboardView = document.getElementById('view-dashboard');
+    if (!dashboardView) return;
+
+    dashboardView.classList.remove('dashboard-refreshing');
+    void dashboardView.offsetWidth;
+    dashboardView.classList.add('dashboard-refreshing');
+
+    const graphTargets = dashboardView.querySelectorAll('#chart-sales, #chart-items, .stat-sparkline svg, .stat-sparkline .spark-line, .stat-sparkline .spark-area');
+    graphTargets.forEach(element => {
+        element.classList.remove('graph-refreshing');
+        void element.getBoundingClientRect();
+        element.classList.add('graph-refreshing');
+    });
+
+    if (triggerDashboardIntervalAnimation.timeoutId) {
+        clearTimeout(triggerDashboardIntervalAnimation.timeoutId);
+    }
+
+    triggerDashboardIntervalAnimation.timeoutId = setTimeout(() => {
+        dashboardView.classList.remove('dashboard-refreshing');
+        graphTargets.forEach(element => element.classList.remove('graph-refreshing'));
+    }, 650);
+}
+
+function setupCustomIntervalDropdown(dropdownEl, onChange) {
+    if (!dropdownEl) return;
+    const trigger = dropdownEl.querySelector('.interval-trigger');
+    const menu = dropdownEl.querySelector('.interval-menu');
+    const hiddenSelect = dropdownEl.querySelector('select');
+    if (!trigger || !menu || !hiddenSelect) return;
+
+    const updateDisplay = () => {
+        const value = hiddenSelect.value;
+        const selected = dropdownEl.querySelector(`.interval-option[data-value="${CSS.escape(value)}"]`);
+        const display = dropdownEl.querySelector('.interval-value');
+        if (display && selected) display.textContent = selected.textContent.trim();
+        dropdownEl.querySelectorAll('.interval-option').forEach(option => {
+            option.classList.toggle('active', option.dataset.value === value);
+        });
+    };
+
+    hiddenSelect.value = salesInterval;
+    updateDisplay();
+
+    trigger.addEventListener('click', event => {
+        event.stopPropagation();
+        const isOpen = dropdownEl.classList.contains('open');
+        document.querySelectorAll('.interval-dropdown').forEach(item => {
+            item.classList.remove('open');
+            const btn = item.querySelector('.interval-trigger');
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        });
+        if (!isOpen) {
+            dropdownEl.classList.add('open');
+            trigger.setAttribute('aria-expanded', 'true');
+        }
+    });
+
+    menu.addEventListener('click', event => {
+        const option = event.target.closest('.interval-option');
+        if (!option) return;
+        hiddenSelect.value = option.dataset.value;
+        updateDisplay();
+        dropdownEl.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+        if (typeof onChange === 'function') onChange(hiddenSelect.value);
+    });
+
+    document.addEventListener('click', event => {
+        if (!dropdownEl.contains(event.target)) {
+            dropdownEl.classList.remove('open');
+            trigger.setAttribute('aria-expanded', 'false');
+        }
+    });
+
+    updateDisplay();
+}
+
+const salesIntervalDropdown = document.querySelector('.interval-dropdown[data-target="sales-interval"]');
+if (salesIntervalDropdown) {
+    salesIntervalDropdown.addEventListener('change', () => {});
+    setupCustomIntervalDropdown(salesIntervalDropdown, (value) => {
+        salesInterval = value;
+        persistAdminInterval();
+        triggerDashboardIntervalAnimation();
+        loadOverviewData();
+    });
+}
+
+const txIntervalDropdown = document.querySelector('.interval-dropdown[data-target="tx-time"]');
+if (txIntervalDropdown) {
+    setupCustomIntervalDropdown(txIntervalDropdown, (value) => {
+        txState.time = value;
+        txState.page = 1;
+        syncTxIntervalControls();
+        renderTransactions();
+    });
+}
 $$('.nav-item[data-view]').forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
 
+const ADMIN_LAST_VIEW_KEY = 'mango-royal-admin-last-view';
+const ADMIN_LAST_INTERVAL_KEY = 'mango-royal-admin-last-interval';
+function getStoredAdminView() {
+    try {
+        const stored = localStorage.getItem(ADMIN_LAST_VIEW_KEY);
+        const allowed = ['dashboard', 'transactions', 'menu', 'reports', 'activity', 'users', 'settings'];
+        return stored && allowed.includes(stored) ? stored : 'dashboard';
+    } catch (e) {
+        return 'dashboard';
+    }
+}
+
+function getStoredAdminInterval() {
+    try {
+        const stored = localStorage.getItem(ADMIN_LAST_INTERVAL_KEY);
+        const allowed = ['day', 'yesterday', 'week', 'month', 'year'];
+        return stored && allowed.includes(stored) ? stored : 'day';
+    } catch (e) {
+        return 'day';
+    }
+}
+
+function persistAdminInterval() {
+    try {
+        localStorage.setItem(ADMIN_LAST_INTERVAL_KEY, salesInterval);
+    } catch (e) {
+        // Ignore storage restrictions in private browsing or locked-down environments.
+    }
+}
+
+function normalizeMenuArchiveState(items) {
+    try {
+        const saved = JSON.parse(localStorage.getItem(MENU_ARCHIVE_STORAGE_KEY) || '{}');
+        return (Array.isArray(items) ? items : []).map(item => {
+            const archived = Boolean(saved[item.id]);
+            return {
+                ...item,
+                archived,
+                available: archived ? false : Boolean(item.available)
+            };
+        });
+    } catch (e) {
+        return (Array.isArray(items) ? items : []).map(item => ({ ...item, archived: false, available: Boolean(item.available) }));
+    }
+}
+
+function persistMenuArchiveState() {
+    try {
+        const archiveState = {};
+        menuItems.forEach(item => {
+            if (item.archived) archiveState[item.id] = true;
+        });
+        localStorage.setItem(MENU_ARCHIVE_STORAGE_KEY, JSON.stringify(archiveState));
+    } catch (e) {
+        // Ignore storage restrictions in private browsing or locked-down environments.
+    }
+}
+
 function switchView(view) {
-    $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-    $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
-    const showDashboardAssistant = view === 'dashboard';
+    const activeView = view || getStoredAdminView();
+    salesInterval = getStoredAdminInterval();
+    $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === activeView));
+    $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + activeView));
+    const showDashboardAssistant = activeView === 'dashboard';
     if (!showDashboardAssistant && assistantDock.classList.contains('is-open')) {
         setAssistantOpen(false);
     }
     assistantDock.hidden = !showDashboardAssistant;
     document.body.classList.toggle('dashboard-active', showDashboardAssistant);
-    if (view === 'dashboard') loadOverviewData();
-    if (view === 'transactions') loadTransactionsData();
-    if (view === 'menu') loadMenuData();
-    if (view === 'reports') {
+    try {
+        localStorage.setItem(ADMIN_LAST_VIEW_KEY, activeView);
+    } catch (e) {
+        // Ignore storage restrictions in private browsing or locked-down environments.
+    }
+    if (activeView === 'dashboard' || activeView === 'reports') loadOverviewData();
+    if (activeView === 'transactions') loadTransactionsData();
+    if (activeView === 'menu') loadMenuData();
+    if (activeView === 'reports') {
         if (!adminSettingsLoaded) loadAdminSettings();
         renderReports();
     }
-    if (view === 'settings') loadAdminSettings();
-    if (view === 'users') renderUsers();
+    if (activeView === 'activity') renderActivityLog();
+    if (activeView === 'settings') loadAdminSettings();
+    if (activeView === 'users') renderUsers();
 }
 
 /* ---------- Data Fetching (Live Backend API) ---------- */
@@ -132,6 +336,10 @@ async function loadOverviewData() {
         $('#sales-interval').value = salesInterval;
     }
     renderDashboard();
+    if (document.getElementById('view-reports')?.classList.contains('active')) {
+        renderReports();
+    }
+    setupItemsSoldInsightToggle();
 }
 
 async function loadTransactionsData() {
@@ -168,7 +376,7 @@ async function loadMenuData() {
         if (res.ok) {
             const data = await res.json();
             if (Array.isArray(data) && data.length > 0) {
-                menuItems = data;
+                menuItems = normalizeMenuArchiveState(data);
             }
         }
     } catch (e) {
@@ -329,45 +537,238 @@ $$('[data-report-section]').forEach(input => {
     });
 });
 
+function setTrendChip(element, value, type) {
+    if (!element) return;
+
+    const sign = value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
+    const icon = sign === 'up' ? '↗' : sign === 'down' ? '↘' : '→';
+    const prefix = sign === 'up' ? '+' : sign === 'down' ? '-' : '';
+    const text = `${prefix}${Math.abs(value).toFixed(type === 'percent' ? 1 : 0)}%`;
+
+    element.classList.remove('trend-up', 'trend-down', 'trend-flat');
+    element.classList.add(sign === 'up' ? 'trend-up' : sign === 'down' ? 'trend-down' : 'trend-flat');
+
+    const iconEl = element.querySelector('.trend-icon');
+    const textEl = element.querySelector('.trend-text');
+    if (iconEl) iconEl.textContent = icon;
+    if (textEl) textEl.textContent = text;
+}
+
+function buildSparklinePath(values, width = 110, height = 42, padding = 4) {
+    const safeValues = Array.isArray(values) && values.length ? values.map(value => Number(value) || 0) : [0, 0, 0, 0];
+    const max = Math.max(...safeValues, 1);
+    const min = Math.min(...safeValues, 0);
+    const range = max - min || 1;
+    const usableWidth = width - padding * 2;
+    const usableHeight = height - padding * 2;
+
+    return safeValues.map((value, index) => {
+        const x = padding + (safeValues.length === 1 ? 0 : (index / (safeValues.length - 1)) * usableWidth);
+        const y = height - padding - ((value - min) / range) * usableHeight;
+        return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(' ');
+}
+
+function buildThreeDaySummary(values) {
+    const series = Array.isArray(values) && values.length ? values.map(value => Number(value) || 0) : [0, 0, 0];
+    const lastThree = series.slice(-3);
+    const padded = [...Array(Math.max(0, 3 - lastThree.length)).fill(0), ...lastThree].slice(-3);
+    return padded;
+}
+
+function getThreeDayTrend(values) {
+    const summary = buildThreeDaySummary(values);
+    const previous = summary.slice(0, 2);
+    const current = summary[summary.length - 1] || 0;
+    const priorHigh = Math.max(...previous);
+    const priorLow = Math.min(...previous);
+
+    let status = 'orange';
+    if (current > priorHigh) status = 'green';
+    else if (current < priorLow) status = 'red';
+
+    const denominator = Math.max(Math.abs(priorHigh - priorLow), 1);
+    const deltaPercent = ((current - priorHigh) / denominator) * 100;
+    const lowDeltaPercent = ((current - priorLow) / denominator) * 100;
+
+    return {
+        summary,
+        current,
+        high: priorHigh,
+        low: priorLow,
+        status,
+        deltaPercent,
+        lowDeltaPercent
+    };
+}
+
+function updateSparklineTooltip(targetId, value, status = 'orange', type = 'sales') {
+    const tooltip = document.getElementById(targetId);
+    if (!tooltip) return;
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const formatValue = type === 'sales'
+        ? `₱${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        : `${Math.abs(value).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+    tooltip.textContent = `${sign}${formatValue}`;
+    tooltip.style.background = status === 'green' ? 'rgba(22, 163, 74, 0.95)' : status === 'red' ? 'rgba(220, 38, 38, 0.95)' : 'rgba(249, 115, 22, 0.95)';
+    tooltip.style.borderColor = status === 'green' ? 'rgba(22, 163, 74, 0.35)' : status === 'red' ? 'rgba(220, 38, 38, 0.35)' : 'rgba(249, 115, 22, 0.35)';
+}
+
+function bindSparklineTooltip(elementId) {
+    const sparkline = document.getElementById(elementId);
+    if (!sparkline) return;
+    const tooltip = sparkline.querySelector('.stat-tooltip');
+    if (!tooltip) return;
+
+    sparkline.addEventListener('pointermove', event => {
+        tooltip.style.left = `${event.clientX}px`;
+        tooltip.style.top = `${event.clientY - 10}px`;
+        tooltip.classList.add('visible');
+    });
+
+    sparkline.addEventListener('pointerleave', () => tooltip.classList.remove('visible'));
+}
+
+function renderSparkline(elementId, values, color = '#f97316') {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+
+    const numericValues = Array.isArray(values) && values.length ? values.map(Number) : [0, 0, 0];
+    const paddedValues = numericValues.length >= 3 ? numericValues.slice(-3) : [...Array(Math.max(0, 3 - numericValues.length)).fill(0), ...numericValues];
+    const path = buildSparklinePath(paddedValues);
+    const fillPath = `${path} L 106 38 L 4 38 Z`;
+
+    const line = el.querySelector('.spark-line');
+    const area = el.querySelector('.spark-area');
+    if (line && area) {
+        line.setAttribute('d', path);
+        line.setAttribute('stroke', color);
+        area.setAttribute('d', fillPath);
+        area.setAttribute('fill', color === '#3b82f6' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(249, 115, 22, 0.12)');
+    }
+
+    const segmentMarkup = paddedValues.map((value, index) => {
+        const segmentWidth = 100 / paddedValues.length;
+        const label = paddedValues.length === 3
+            ? index === 0 ? 'Day 1' : index === 1 ? 'Day 2' : 'Day 3'
+            : `Point ${index + 1}`;
+        return `
+            <span class="spark-segment" tabindex="0" style="width:${segmentWidth}%" aria-label="${label}">
+                <span class="spark-segment-tooltip">${label}</span>
+            </span>
+        `;
+    }).join('');
+
+    const overlay = el.querySelector('.spark-segment-overlay');
+    if (overlay) {
+        overlay.innerHTML = segmentMarkup;
+    } else {
+        const newOverlay = document.createElement('div');
+        newOverlay.className = 'spark-segment-overlay';
+        newOverlay.innerHTML = segmentMarkup;
+        el.appendChild(newOverlay);
+    }
+}
+
 /* ---------- Dashboard ---------- */
 function renderDashboard() {
-    $('#stat-sales').textContent  = peso(overviewData.todaySales || 0);
-    $('#stat-orders').textContent = overviewData.totalOrders || 0;
-    $('#stat-best').textContent   = overviewData.bestSeller || 'No sales yet';
-    $('#stat-peak').textContent   = overviewData.peakTime || 'None yet';
+    const salesDelta = Number(overviewData.salesDelta || 0);
+    const orderDelta = Number(overviewData.ordersDelta || 0);
+    const salesPct = Number(overviewData.salesDeltaPct || 0);
+    const orderPct = Number(overviewData.ordersDeltaPct || 0);
+
+    const statSalesEl = $('#stat-sales');
+    const statOrdersEl = $('#stat-orders');
+    const statBestEl = $('#stat-best');
+    const statPeakEl = $('#stat-peak');
+    const avgOrderEl = $('#metric-average-order');
+    const inProgressEl = $('#metric-in-progress');
+    const completedEl = $('#metric-completed');
+    const voidedEl = $('#metric-voided');
+
+    if (statSalesEl) statSalesEl.textContent = peso(overviewData.todaySales || 0);
+    if (statOrdersEl) statOrdersEl.textContent = overviewData.totalOrders || 0;
+    setTrendChip(document.getElementById('sales-trend'), salesPct, 'percent');
+    setTrendChip(document.getElementById('orders-trend'), orderPct, 'percent');
+    if (statBestEl) statBestEl.textContent = overviewData.bestSeller || 'No sales yet';
+    if (statPeakEl) statPeakEl.textContent = overviewData.peakTime || 'None yet';
     const unavailableMetric = '—';
-    $('#metric-average-order').textContent = operationalMetricsAvailable ? peso(overviewData.averageOrderValue) : unavailableMetric;
-    $('#metric-in-progress').textContent = operationalMetricsAvailable ? overviewData.inProgressOrders : unavailableMetric;
-    $('#metric-completed').textContent = operationalMetricsAvailable ? overviewData.completedOrders : unavailableMetric;
-    $('#metric-voided').textContent = operationalMetricsAvailable ? overviewData.voidedOrders : unavailableMetric;
+    if (avgOrderEl) avgOrderEl.textContent = operationalMetricsAvailable ? peso(overviewData.averageOrderValue) : unavailableMetric;
+    if (inProgressEl) inProgressEl.textContent = operationalMetricsAvailable ? overviewData.inProgressOrders : unavailableMetric;
+    if (completedEl) completedEl.textContent = operationalMetricsAvailable ? overviewData.completedOrders : unavailableMetric;
+    if (voidedEl) voidedEl.textContent = operationalMetricsAvailable ? overviewData.voidedOrders : unavailableMetric;
 
     const dineInOrders = operationalMetricsAvailable ? Number(overviewData.dineInOrders) : 0;
     const takeOutOrders = operationalMetricsAvailable ? Number(overviewData.takeOutOrders) : 0;
     const orderMixTotal = dineInOrders + takeOutOrders;
     const dineInPercent = orderMixTotal ? dineInOrders / orderMixTotal * 100 : 0;
-    $('#order-mix-total').textContent = operationalMetricsAvailable
-        ? `${orderMixTotal} order${orderMixTotal === 1 ? '' : 's'}`
-        : 'Metrics unavailable';
-    $('#mix-dine-in-count').textContent = operationalMetricsAvailable ? dineInOrders : unavailableMetric;
-    $('#mix-take-out-count').textContent = operationalMetricsAvailable ? takeOutOrders : unavailableMetric;
-    $('#mix-dine-in').style.width = `${dineInPercent}%`;
-    $('#mix-take-out').style.width = `${100 - dineInPercent}%`;
+    const orderMixTotalEl = $('#order-mix-total');
+    const mixDineInCountEl = $('#mix-dine-in-count');
+    const mixTakeOutCountEl = $('#mix-take-out-count');
+    const mixDineInBar = $('#mix-dine-in');
+    const mixTakeOutBar = $('#mix-take-out');
+
+    if (orderMixTotalEl) {
+        orderMixTotalEl.textContent = operationalMetricsAvailable
+            ? `${orderMixTotal} order${orderMixTotal === 1 ? '' : 's'}`
+            : 'Metrics unavailable';
+    }
+    if (mixDineInCountEl) mixDineInCountEl.textContent = operationalMetricsAvailable ? dineInOrders : unavailableMetric;
+    if (mixTakeOutCountEl) mixTakeOutCountEl.textContent = operationalMetricsAvailable ? takeOutOrders : unavailableMetric;
+    if (mixDineInBar) mixDineInBar.style.width = `${dineInPercent}%`;
+    if (mixTakeOutBar) mixTakeOutBar.style.width = `${100 - dineInPercent}%`;
+    renderPrescriptiveInsights();
     updateClock();
 
     const salesTimeline = Array.isArray(overviewData.salesTimeline) ? overviewData.salesTimeline : [];
+    const fallbackLabels = Array.from({ length: 7 }, (_, index) => `D${index + 1}`);
+    const fallbackSales = Array(7).fill(0);
+    const hasSalesData = salesTimeline.length > 0;
     const salesTotal = salesTimeline.reduce((sum, point) => sum + Number(point.sales || 0), 0);
     const orderTotal = salesTimeline.reduce((sum, point) => sum + Number(point.orders || 0), 0);
     const displayedInterval = overviewData.salesInterval || salesInterval;
-    const intervalLabels = { day: 'today', week: 'the last 7 days', month: 'month to date', year: 'year to date' };
-    $('#sales-chart-summary').textContent =
-        `${intervalLabels[displayedInterval] || 'selected interval'} · ${peso(salesTotal)} sales · ${orderTotal} orders`;
-    const salesLabels = salesTimeline.map(point => point.label);
-    const intervalSales = salesTimeline.map(point => Number(point.sales || 0));
-    const intervalOrders = salesTimeline.map(point => Number(point.orders || 0));
+    const intervalLabels = { day: 'today', yesterday: 'yesterday', week: 'the last 7 days', month: 'month to date', year: 'year to date' };
+    const salesSummaryEl = $('#sales-chart-summary');
+    if (salesSummaryEl) {
+        salesSummaryEl.textContent = hasSalesData
+            ? `${intervalLabels[displayedInterval] || 'selected interval'} · ${peso(salesTotal)} sales · ${orderTotal} orders`
+            : `No sales activity yet · ${peso(0)} sales · 0 orders`;
+    }
+    const salesLabels = hasSalesData ? salesTimeline.map(point => point.label) : fallbackLabels;
+    const intervalSales = hasSalesData ? salesTimeline.map(point => Number(point.sales || 0)) : fallbackSales;
+    const intervalOrders = hasSalesData ? salesTimeline.map(point => Number(point.orders || 0)) : fallbackSales;
+
+    const dayTrendSales = Array.isArray(overviewData.dailyTrend) && overviewData.dailyTrend.length
+        ? overviewData.dailyTrend.map(point => Number(point.sales || 0))
+        : [0, 0, 0];
+    const dayTrendOrders = Array.isArray(overviewData.dailyTrend) && overviewData.dailyTrend.length
+        ? overviewData.dailyTrend.map(point => Number(point.orders || 0))
+        : [0, 0, 0];
+
+    const salesTrend = getThreeDayTrend(dayTrendSales);
+    const ordersTrend = getThreeDayTrend(dayTrendOrders);
+    const previousSalesValue = Array.isArray(dayTrendSales) && dayTrendSales.length > 1 ? Number(dayTrendSales[dayTrendSales.length - 2]) : 0;
+    const previousOrdersValue = Array.isArray(dayTrendOrders) && dayTrendOrders.length > 1 ? Number(dayTrendOrders[dayTrendOrders.length - 2]) : 0;
+    const currentSalesValue = Number(overviewData.todaySales || 0);
+    const currentOrdersValue = Number(overviewData.totalOrders || 0);
+    const salesDeltaValue = currentSalesValue - previousSalesValue;
+    const ordersDeltaValue = currentOrdersValue - previousOrdersValue;
+
+    renderSparkline('sales-sparkline', salesTrend.summary, '#f97316');
+    renderSparkline('orders-sparkline', ordersTrend.summary, '#3b82f6');
+    updateSparklineTooltip('sales-tooltip', salesDeltaValue, salesTrend.status, 'sales');
+    updateSparklineTooltip('orders-tooltip', ordersDeltaValue, ordersTrend.status, 'orders');
+    bindSparklineTooltip('sales-sparkline');
+    bindSparklineTooltip('orders-sparkline');
 
     // 1. Sales Analytics Line Chart
     destroyChart('sales');
     const salesChartOptions = chartBase();
+    salesChartOptions.animation = {
+        duration: 700,
+        easing: 'easeOutQuart'
+    };
+    salesChartOptions.responsiveAnimationDuration = 550;
     salesChartOptions.scales.y.title = { display: true, text: 'Sales (₱)' };
     salesChartOptions.scales.y.ticks.callback = value => peso(value);
     salesChartOptions.scales.orders = {
@@ -416,11 +817,21 @@ function renderDashboard() {
         options: salesChartOptions
     });
 
-    // 2. Items Sold Today Bar Chart (Real items from DB)
+    // 2. Items Sold Bar Chart (respects the selected interval)
     destroyChart('items');
+    const itemsIntervalLabels = { day: 'Today', yesterday: 'Yesterday', week: 'Last 7 days', month: 'Month to date', year: 'Year to date' };
+    const itemsTitle = $('#items-sold-title');
+    if (itemsTitle) {
+        itemsTitle.textContent = `Items Sold · ${itemsIntervalLabels[displayedInterval] || 'Selected interval'}`;
+    }
+
     const topItems = (overviewData.topProducts || []);
-    const itemNames = topItems.length ? topItems.map(d => d.name) : ['No items sold yet'];
-    const itemCounts = topItems.length ? topItems.map(d => d.sold) : [0];
+    const hasItems = topItems.length > 0;
+    const fallbackItemNames = ['Item A', 'Item B', 'Item C', 'Item D'];
+    const fallbackItemCounts = [0, 0, 0, 0];
+    const itemNames = hasItems ? topItems.map(d => d.name) : fallbackItemNames;
+    const itemCounts = hasItems ? topItems.map(d => d.sold) : fallbackItemCounts;
+    const itemColors = itemNames.map((_, index) => (hasItems && index === 0) ? '#f97316' : '#fdba74');
 
     charts.items = new Chart($('#chart-items'), {
         type: 'bar',
@@ -429,20 +840,158 @@ function renderDashboard() {
             datasets: [{
                 label: 'Quantity Sold',
                 data: itemCounts,
-                backgroundColor: '#f97316',
-                borderRadius: 6,
+                backgroundColor: itemColors,
+                borderColor: itemColors,
+                borderWidth: 1,
+                borderRadius: 8,
+                borderSkipped: false,
                 maxBarThickness: 36
             }]
         },
-        options: chartBase()
+        options: {
+            ...chartBase(),
+            plugins: {
+                ...chartBase().plugins,
+                tooltip: {
+                    callbacks: {
+                        label: context => `Sold: ${context.parsed.y} item${context.parsed.y === 1 ? '' : 's'}`
+                    }
+                }
+            }
+        }
+    });
+}
+
+function getItemsSoldInsightText() {
+    const topProducts = (overviewData.topProducts || []).filter(Boolean);
+    const intervalMap = {
+        day: 'today',
+        yesterday: 'yesterday',
+        week: 'this week',
+        month: 'this month',
+        year: 'this year'
+    };
+    const selectedInterval = intervalMap[salesInterval] || 'this period';
+    const best = topProducts[0] || null;
+    const second = topProducts[1] || null;
+    const low = topProducts.length > 1 ? topProducts[topProducts.length - 1] : null;
+    const peakWindow = overviewData.peakTime && overviewData.peakTime !== 'None yet' ? overviewData.peakTime : '12:00 PM - 2:00 PM';
+
+    if (!best) {
+        return {
+            title: 'No strong demand signal yet',
+            text: `For ${selectedInterval}, the menu has not built a clear leader yet. Keep your best movers visible and refresh the combo board to generate early demand.`
+        };
+    }
+
+    const hero = best.name;
+    const challenger = second && second.name && second.name !== hero ? `${second.name} is close behind.` : 'The rest of the menu is still settling into a cadence.';
+    const quiet = low && low.name && low.name !== hero ? `${low.name} is the quietest performer right now.` : 'Nothing is showing a major dip in demand.';
+
+    return {
+        title: `${hero} is leading the menu`,
+        text: `For ${selectedInterval}, ${hero} is clearly the star performer and the pattern is telling: it spikes around ${peakWindow}. ${challenger} ${quiet} The best move is to spotlight ${hero} in a combo push and front-load it before the rush window so demand converts into faster sell-through.`
+    };
+}
+
+function renderPrescriptiveInsights() {
+    const topProducts = (overviewData.topProducts || []).filter(Boolean);
+    const topProduct = topProducts[0] || null;
+    const lowProduct = topProducts.length > 1 ? topProducts[topProducts.length - 1] : null;
+    const peakWindow = overviewData.peakTime && overviewData.peakTime !== 'None yet' ? overviewData.peakTime : '12:00 PM - 2:00 PM';
+    const currentHour = new Date().getHours();
+    const demandPattern = currentHour >= 11 && currentHour <= 17
+        ? 'Afternoon demand remains strong and highly predictable.'
+        : currentHour >= 18
+            ? 'Evening demand is trending upward with stronger repeat orders.'
+            : 'Morning demand remains steady and predictable.';
+    const seasonalLabel = salesInterval === 'day' ? 'day' : salesInterval === 'week' ? 'week' : salesInterval === 'month' ? 'month' : 'period';
+
+    const forecastName = $('#forecast-item-name');
+    const forecastDetail = $('#forecast-item-detail');
+    const forecastLowDemand = $('#forecast-low-demand');
+    const forecastBestWindow = $('#forecast-best-window');
+    const forecastWeatherTrend = $('#forecast-weather-trend');
+    const forecastAction = $('#forecast-action');
+
+    if (forecastName) {
+        forecastName.textContent = topProduct ? topProduct.name : 'No sales data yet';
+    }
+    if (forecastDetail) {
+        forecastDetail.textContent = topProduct
+            ? `Forecasted to peak during ${peakWindow} based on prior demand and current trends.`
+            : 'Forecast data will populate after items are sold.';
+    }
+    if (forecastLowDemand) {
+        forecastLowDemand.textContent = lowProduct && lowProduct.name
+            ? `${lowProduct.name} has been low on sales for this ${seasonalLabel}. Consider a promo bundle or menu highlight.`
+            : 'No low-demand product is visible yet. Keep the menu mix balanced.';
+    }
+    if (forecastBestWindow) forecastBestWindow.textContent = peakWindow;
+    if (forecastWeatherTrend) forecastWeatherTrend.textContent = demandPattern;
+    if (forecastAction) {
+        forecastAction.textContent = topProduct
+            ? `Promote ${topProduct.name} before ${peakWindow} to capture peak demand.`
+            : 'Review item-level demand and adjust bundles before peak hours.';
+    }
+
+    const itemsInsightPanel = document.getElementById('items-ai-panel');
+    if (itemsInsightPanel) {
+        const insight = getItemsSoldInsightText();
+        itemsInsightPanel.innerHTML = `
+            <span class="items-ai-tag">AI Insight</span>
+            <h4>${insight.title}</h4>
+            <p>${insight.text}</p>
+        `;
+    }
+}
+
+function setupItemsSoldInsightToggle() {
+    const card = document.getElementById('items-sold-card');
+    if (!card || card.dataset.bound === 'true') return;
+
+    const badge = document.getElementById('items-card-badge');
+    const setCardState = (isOpen) => {
+        card.classList.toggle('is-open', isOpen);
+        card.setAttribute('aria-expanded', String(isOpen));
+        if (badge) badge.textContent = isOpen ? 'AI Insight' : 'Graph';
+        const chartWrap = card.querySelector('.chart-wrap');
+        if (chartWrap) {
+            chartWrap.style.display = isOpen ? 'none' : 'block';
+        }
+        const itemInsightPanel = document.getElementById('items-ai-panel');
+        if (itemInsightPanel) {
+            if (isOpen) {
+                const insight = getItemsSoldInsightText();
+                itemInsightPanel.innerHTML = `
+                    <span class="items-ai-tag">AI Insight</span>
+                    <h4>${insight.title}</h4>
+                    <p>${insight.text}</p>
+                `;
+            } else {
+                itemInsightPanel.innerHTML = '';
+            }
+        }
+    };
+
+    const toggle = () => {
+        const isOpen = !card.classList.contains('is-open');
+        setCardState(isOpen);
+    };
+
+    card.dataset.bound = 'true';
+    setCardState(false);
+    card.addEventListener('click', toggle);
+    card.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle();
+        }
     });
 }
 
 function updateClock() {
-    const now = new Date();
-    const t = $('#w-time'); const d = $('#w-date');
-    if (t) t.textContent = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
-    if (d) d.textContent = now.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+    // Reserved for dashboard time-based refreshes without the removed weather widget.
 }
 setInterval(updateClock, 1000);
 
@@ -482,17 +1031,48 @@ function chartBase() {
 function destroyChart(k) { if (charts[k]) { charts[k].destroy(); charts[k] = null; } }
 
 /* ---------- Transactions ---------- */
-const txState = { search:'', status:'all', payment:'all', time:'all', day:'all', expanded:null, auditItem:null };
+const txState = { search:'', status:'all', payment:'all', time:'today', day:'all', expanded:null, auditItem:null, page:1, perPage:8 };
+function syncTxIntervalControls() {
+    const filterSelect = $('#tx-time');
+    const txDropdown = document.querySelector('.interval-dropdown[data-target="tx-time"]');
+    if (filterSelect && Array.from(filterSelect.options).some(opt => opt.value === txState.time)) filterSelect.value = txState.time;
+    if (txDropdown) {
+        const selected = txDropdown.querySelector(`.interval-option[data-value="${CSS.escape(txState.time)}"]`);
+        const valueText = txDropdown.querySelector('.interval-value');
+        if (selected && valueText) valueText.textContent = selected.textContent.trim();
+        txDropdown.querySelectorAll('.interval-option').forEach(option => {
+            option.classList.toggle('active', option.dataset.value === txState.time);
+        });
+    }
+}
+syncTxIntervalControls();
 ['tx-search','tx-status','tx-payment','tx-time','tx-day'].forEach(id => {
-    document.addEventListener('input', e => { if (e.target.id === id) { txState[id.slice(3)] = e.target.value; renderTransactions(); } });
-    document.addEventListener('change', e => { if (e.target.id === id) { txState[id.slice(3)] = e.target.value; renderTransactions(); } });
+    document.addEventListener('input', e => { if (e.target.id === id) { txState[id.slice(3)] = e.target.value; txState.page = 1; syncTxIntervalControls(); renderTransactions(); } });
+    document.addEventListener('change', e => { if (e.target.id === id) { txState[id.slice(3)] = e.target.value; txState.page = 1; syncTxIntervalControls(); renderTransactions(); } });
 });
+$('#tx-prev-page')?.addEventListener('click', () => {
+    if (txState.page > 1) {
+        txState.page -= 1;
+        renderTransactions();
+    }
+});
+$('#tx-next-page')?.addEventListener('click', () => {
+    const totalPages = Math.max(1, Math.ceil(filterTransactions().length / txState.perPage));
+    if (txState.page < totalPages) {
+        txState.page += 1;
+        renderTransactions();
+    }
+});
+
+function normalizeStatusValue(value) {
+    return String(value ?? '').trim().toLowerCase();
+}
 
 function filterTransactions() {
     return recentTransactions.filter(t => {
         const q = txState.search.toLowerCase();
         if (q && !t.id.toLowerCase().includes(q) && !t.items.some(i => i.toLowerCase().includes(q))) return false;
-        if (txState.status !== 'all' && t.status !== txState.status) return false;
+        if (txState.status !== 'all' && normalizeStatusValue(t.status) !== normalizeStatusValue(txState.status)) return false;
         if (txState.payment !== 'all' && t.paymentMethod !== txState.payment) return false;
         if (txState.time !== 'all') {
             const now = new Date(); const td = t.date;
@@ -545,13 +1125,24 @@ function auditEntryHtml(entry) {
 
 function renderTransactions() {
     const list = filterTransactions();
+    const totalPages = Math.max(1, Math.ceil(list.length / txState.perPage));
+    txState.page = Math.min(txState.page, totalPages);
+
+    const pagedList = list.slice((txState.page - 1) * txState.perPage, txState.page * txState.perPage);
     const total = list.reduce((s,t) => s + (t.status !== 'Void' ? t.total : 0), 0);
     $('#tx-count').textContent = list.length;
     $('#tx-total').textContent = peso(total);
     $('#tx-avg').textContent   = peso(list.length ? Math.round(total/list.length) : 0);
 
+    const prevBtn = $('#tx-prev-page');
+    const nextBtn = $('#tx-next-page');
+    const pageIndicator = $('#tx-page-indicator');
+    if (prevBtn) prevBtn.disabled = txState.page <= 1;
+    if (nextBtn) nextBtn.disabled = txState.page >= totalPages;
+    if (pageIndicator) pageIndicator.textContent = `Page ${txState.page} of ${totalPages}`;
+
     const tbody = $('#tx-table tbody');
-    tbody.innerHTML = list.map(t => {
+    tbody.innerHTML = pagedList.map(t => {
         const pillCls = (t.status||'').toLowerCase();
         const expanded = txState.expanded === t.id;
         const detailId = `tx-details-${t.rawId}`;
@@ -666,49 +1257,168 @@ function renderTransactions() {
     }));
 }
 
-// Export Transactions CSV
-$('#export-tx-btn')?.addEventListener('click', () => {
+function buildPrintableTransactionsHtml(list) {
+    const rows = list.map(t => `
+        <tr>
+            <td>${escapeHtml(t.id)}</td>
+            <td>${escapeHtml(new Date(t.date).toLocaleString('en-US'))}</td>
+            <td>${escapeHtml(t.cashierId || 'Unknown')}</td>
+            <td>${escapeHtml((t.items || []).join(', '))}</td>
+            <td>${escapeHtml(peso2(t.total || 0))}</td>
+            <td>${escapeHtml(peso2(t.amountChange || 0))}</td>
+            <td>${escapeHtml(t.status || 'Completed')}</td>
+            <td>${escapeHtml(t.paymentMethod || 'Cash')}</td>
+        </tr>
+    `).join('');
+
+    return `<!doctype html><html><head><title>Mango Royal Transactions Export</title>
+        <style>body{font:14px Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}table{border-collapse:collapse;width:100%;margin-top:18px}td,th{border:1px solid #d1d5db;padding:8px;text-align:left}th{background:#f3f4f6}@media print{button{display:none}}</style>
+        </head><body><h1>Transaction Export</h1><p>Generated ${escapeHtml(new Date().toLocaleString())}</p>
+        <table><thead><tr><th>Order ID</th><th>Date &amp; Time</th><th>Cashier</th><th>Items</th><th>Total</th><th>Change</th><th>Status</th><th>Payment</th></tr></thead><tbody>${rows}</tbody></table><button onclick="window.print()">Print / Save as PDF</button></body></html>`;
+}
+
+function runTransactionsExport(mode = 'digital') {
     const list = filterTransactions();
     if (!list.length) return alert('No transactions to export.');
-    let csv = 'Order ID,Date,Cashier,Items,Total,Change,Status,Payment Method\n';
-    list.forEach(t => {
-        csv += `"${t.id}","${t.date.toISOString()}","${t.cashierId}","${t.items.join('; ')}",${t.total},${t.amountChange||0},"${t.status}","${t.paymentMethod}"\n`;
+
+    const exportLabel = mode === 'digital' ? 'Digital Export' : mode === 'print' ? 'Print' : 'Digital + Print Export';
+    recordActivity({
+        user: 'Admin User',
+        action: 'Exported transactions',
+        details: `Transaction list exported via ${exportLabel}.`,
+        category: 'Transactions'
     });
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `transactions_${Date.now()}.csv`;
-    a.click();
-});
+
+    if (mode === 'digital' || mode === 'digital-print') {
+        let csv = 'Order ID,Date,Cashier,Items,Total,Change,Status,Payment Method\n';
+        list.forEach(t => {
+            csv += `"${t.id}","${new Date(t.date).toISOString()}","${t.cashierId}","${(t.items || []).join('; ')}",${t.total},${t.amountChange||0},"${t.status}","${t.paymentMethod}"\n`;
+        });
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `transactions_${Date.now()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    if (mode === 'print' || mode === 'digital-print') {
+        const w = window.open('', '_blank', 'width=1000,height=700');
+        if (!w) return alert('Popups blocked. Please allow popups to print or save the transaction export.');
+        w.document.write(buildPrintableTransactionsHtml(list));
+        w.document.close();
+    }
+}
+
+const exportTxButton = $('#export-tx-btn');
+if (exportTxButton) {
+    const exportWrap = document.createElement('div');
+    exportWrap.className = 'report-export-wrap';
+    exportTxButton.parentNode.insertBefore(exportWrap, exportTxButton);
+    exportWrap.appendChild(exportTxButton);
+
+    const exportMenu = document.createElement('div');
+    exportMenu.className = 'report-export-menu';
+    exportMenu.innerHTML = `
+        <button type="button" class="report-export-option is-primary" data-tx-export-mode="digital">Digital Export</button>
+        <button type="button" class="report-export-option" data-tx-export-mode="print">Print</button>
+        <button type="button" class="report-export-option is-danger" data-tx-export-mode="digital-print">Digital + Print Export</button>
+    `;
+    exportWrap.appendChild(exportMenu);
+
+    const toggleMenu = () => {
+        const isOpen = exportWrap.classList.contains('open');
+        document.querySelectorAll('.report-export-wrap').forEach(item => item.classList.remove('open'));
+        if (!isOpen) exportWrap.classList.add('open');
+        exportTxButton.setAttribute('aria-expanded', String(exportWrap.classList.contains('open')));
+    };
+
+    exportTxButton.addEventListener('click', event => {
+        event.stopPropagation();
+        toggleMenu();
+    });
+
+    exportMenu.querySelectorAll('[data-tx-export-mode]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            const mode = button.dataset.txExportMode;
+            runTransactionsExport(mode);
+            exportWrap.classList.remove('open');
+            exportTxButton.setAttribute('aria-expanded', 'false');
+        });
+    });
+
+    document.addEventListener('click', event => {
+        if (!exportWrap.contains(event.target)) {
+            exportWrap.classList.remove('open');
+            exportTxButton.setAttribute('aria-expanded', 'false');
+        }
+    });
+}
 
 /* ---------- Menu Management ---------- */
 let menuCategory = 'all';
+let menuShowArchived = false;
+
+function isMenuArchived(item) {
+    return Boolean(item?.archived);
+}
+
+function getMenuState(item) {
+    if (isMenuArchived(item)) {
+        return { label: 'Archived', className: 'is-archived' };
+    }
+    return item?.available ? { label: 'Available', className: 'is-available' } : { label: 'Unavailable', className: 'is-unavailable' };
+}
+
 function renderMenu() {
     const chips = ['all','BEST_SELLERS','PREMIUM','BASIC','SEASONAL'];
+    const visibleItems = menuItems.filter(i => menuShowArchived ? isMenuArchived(i) : !isMenuArchived(i));
     $('#menu-chips').innerHTML = chips.map(c => {
-        const count = c === 'all' ? menuItems.length : menuItems.filter(i => i.category === c).length;
+        const count = c === 'all' ? visibleItems.length : visibleItems.filter(i => i.category === c).length;
         return `<button class="chip ${menuCategory===c?'active':''}" data-cat="${c}" aria-pressed="${menuCategory===c}">${escapeHtml(categoryLabels[c])} <span class="count">${count}</span></button>`;
     }).join('');
     $$('#menu-chips .chip').forEach(b => b.addEventListener('click', () => { menuCategory = b.dataset.cat; renderMenu(); }));
 
-    const list = menuCategory === 'all' ? menuItems : menuItems.filter(i => i.category === menuCategory);
+    const archiveBtn = $('#menu-archive-toggle');
+    const archiveBadge = $('#menu-archive-badge');
+    const archivedCount = menuItems.filter(i => isMenuArchived(i)).length;
+    if (archiveBtn) {
+        archiveBtn.classList.toggle('is-active', menuShowArchived);
+        archiveBtn.setAttribute('aria-pressed', String(menuShowArchived));
+        const icon = archiveBtn.querySelector('.menu-archive-icon');
+        const text = archiveBtn.querySelector('.menu-archive-text');
+        if (menuShowArchived) {
+            if (icon) icon.textContent = '←';
+            if (text) text.textContent = 'Back';
+        } else {
+            if (icon) icon.textContent = 'A';
+            if (text) text.textContent = 'Archived';
+        }
+    }
+    if (archiveBadge) archiveBadge.textContent = archivedCount;
+
+    const list = menuCategory === 'all' ? visibleItems : visibleItems.filter(i => i.category === menuCategory);
     const resultCount = $('#menu-result-count');
-    if (resultCount) resultCount.textContent = `${list.length} ${list.length === 1 ? 'item' : 'items'}`;
+    const label = menuShowArchived ? (list.length === 1 ? 'archived item' : 'archived items') : (list.length === 1 ? 'item' : 'items');
+    if (resultCount) resultCount.textContent = `${list.length} ${label}`;
 
     if (list.length === 0) {
-        $('#menu-grid').innerHTML = `<div class="menu-empty"><span class="menu-empty-icon" aria-hidden="true">◇</span><strong>No menu items yet</strong><span>There are no products in this category.</span></div>`;
+        const emptyText = menuShowArchived ? 'No archived items in this category.' : 'There are no products in this category.';
+        $('#menu-grid').innerHTML = `<div class="menu-empty"><span class="menu-empty-icon" aria-hidden="true">◇</span><strong>${menuShowArchived ? 'No archived items' : 'No menu items yet'}</strong><span>${emptyText}</span></div>`;
         return;
     }
 
     $('#menu-grid').innerHTML = list.map(i => {
         const imgSrc = i.image ? (i.image.startsWith('http') ? i.image : `${API_BASE}/images/${i.image}`) : 'MangoRoyal.png';
+        const status = getMenuState(i);
         return `
-        <article class="menu-card ${i.available ? '' : 'unavailable'}">
+        <article class="menu-card ${i.available ? '' : 'unavailable'} ${isMenuArchived(i) ? 'is-archived' : ''}">
             <div class="menu-card-image">
                 <img src="${escapeHtml(imgSrc)}" alt="${escapeHtml(i.name)}" loading="lazy" onerror="this.onerror=null;this.src='MangoRoyal.png';">
-                <span class="menu-availability ${i.available ? 'is-available' : 'is-unavailable'}">
-                    <span class="availability-dot" aria-hidden="true"></span>${i.available ? 'Available' : 'Out of stock'}
+                <span class="menu-availability ${status.className}">
+                    <span class="availability-dot" aria-hidden="true"></span>${status.label}
                 </span>
             </div>
             <div class="menu-body">
@@ -721,11 +1431,14 @@ function renderMenu() {
                 </div>
             </div>
             <div class="menu-actions">
-                <button class="menu-action-toggle ${i.available ? '' : 'is-unavailable'}" data-toggle="${escapeHtml(i.id)}" aria-label="Mark ${escapeHtml(i.name)} ${i.available ? 'out of stock' : 'available'}">
+                <button class="menu-action-toggle ${i.available ? '' : 'is-unavailable'}" data-toggle="${escapeHtml(i.id)}" aria-label="Mark ${escapeHtml(i.name)} ${i.available ? 'out of stock' : 'available'}" ${isMenuArchived(i) ? 'disabled' : ''}>
                     <span aria-hidden="true">${i.available ? '●' : '○'}</span>${i.available ? 'Available' : 'Unavailable'}
                 </button>
                 <button class="menu-action-edit" data-edit="${escapeHtml(i.id)}" aria-label="Edit ${escapeHtml(i.name)}">Edit</button>
-                <button class="menu-action-delete" data-del="${escapeHtml(i.id)}" aria-label="Delete ${escapeHtml(i.name)}" title="Delete item"><span aria-hidden="true">×</span></button>
+                <button class="menu-action-delete ${isMenuArchived(i) ? 'is-archived' : ''}" data-archive="${escapeHtml(i.id)}" aria-label="Archive ${escapeHtml(i.name)}" title="${isMenuArchived(i) ? 'Archived item' : 'Archive item'}">
+                    <span class="archive-mark" aria-hidden="true">A</span>
+                    <span class="archive-loading" aria-hidden="true"></span>
+                </button>
             </div>
         </article>
         `;
@@ -735,13 +1448,22 @@ function renderMenu() {
     $$('[data-toggle]').forEach(b => b.addEventListener('click', async () => {
         const id = b.dataset.toggle;
         const it = menuItems.find(x => x.id === id);
-        if (!it) return;
+        if (!it || isMenuArchived(it)) return;
+        const previousState = it.available;
         it.available = !it.available;
         renderMenu();
 
         try {
             await fetch(`${API_BASE}/api/admin/menu/${id}/toggle`, { method: 'PATCH' });
+            recordActivity({
+                user: 'Admin User',
+                action: 'Toggled item availability',
+                details: `${it.name} set to ${it.available ? 'available' : 'unavailable'} for ordering.`,
+                category: 'Menu'
+            });
         } catch (e) {
+            it.available = previousState;
+            renderMenu();
             console.warn('Toggle failed on server', e);
         }
     }));
@@ -749,21 +1471,61 @@ function renderMenu() {
     // Edit Item Modal
     $$('[data-edit]').forEach(b => b.addEventListener('click', () => openMenuModal(menuItems.find(x => x.id === b.dataset.edit))));
 
-    // Delete Item
-    $$('[data-del]').forEach(b => b.addEventListener('click', async () => {
-        const id = b.dataset.del;
+    // Archive Item (no permanent delete)
+    $$('[data-archive]').forEach(b => b.addEventListener('click', () => {
+        const id = b.dataset.archive;
         const it = menuItems.find(x => x.id === id);
-        if (confirm(`Are you sure you want to delete "${it.name}"?`)) {
-            menuItems = menuItems.filter(x => x.id !== id);
-            renderMenu();
-            try {
-                await fetch(`${API_BASE}/api/admin/menu/${id}`, { method: 'DELETE' });
-            } catch (e) {
-                console.warn('Delete failed on server', e);
+        if (!it || isMenuArchived(it)) return;
+
+        openModal('Archive Item', `
+            <div class="archive-confirmation">
+                <div class="archive-confirmation-icon" aria-hidden="true">A</div>
+                <div class="archive-confirmation-copy">
+                    <h4>Archive "${escapeHtml(it.name)}"?</h4>
+                    <p>This will keep it in the catalog but remove it from active sales.</p>
+                </div>
+            </div>
+        `, [
+            { label: 'Cancel', cls: 'btn-ghost', action: closeModal },
+            {
+                label: 'Archive Item',
+                cls: 'btn btn-danger',
+                action: async () => {
+                    closeModal();
+                    b.disabled = true;
+                    b.classList.add('is-loading');
+                    const previousState = { archived: it.archived, available: it.available };
+                    it.archived = true;
+                    it.available = false;
+                    persistMenuArchiveState();
+                    renderMenu();
+                    try {
+                        await fetch(`${API_BASE}/api/admin/menu/${id}`, { method: 'DELETE' });
+                        recordActivity({
+                            user: 'Admin User',
+                            action: 'Archived item',
+                            details: `${it.name} was archived and removed from active ordering.`,
+                            category: 'Menu'
+                        });
+                    } catch (e) {
+                        it.archived = previousState.archived;
+                        it.available = previousState.available;
+                        persistMenuArchiveState();
+                        renderMenu();
+                        console.warn('Archive failed on server', e);
+                    } finally {
+                        b.disabled = false;
+                        b.classList.remove('is-loading');
+                    }
+                }
             }
-        }
+        ]);
     }));
 }
+$('#menu-archive-toggle')?.addEventListener('click', () => {
+    menuShowArchived = !menuShowArchived;
+    renderMenu();
+});
 $('#menu-add').addEventListener('click', () => openMenuModal(null));
 
 function openMenuModal(item) {
@@ -844,8 +1606,18 @@ function openMenuModal(item) {
                     if (!response.ok) throw new Error(result.error || `Save failed (HTTP ${response.status}).`);
                     updated.id = String(result.product_id);
                     menuItems.push(updated);
+                    recordActivity({
+                        user: 'Admin User',
+                        action: 'Added menu item',
+                        details: `${updated.name} was added to the menu.`,
+                        category: 'Menu'
+                    });
                 } else {
                     updated.id = it.id;
+                    const oldTall = Number(it.price?.tall ?? 0);
+                    const oldGrande = Number(it.price?.grande ?? 0);
+                    const newTall = Number(updated.price?.tall ?? 0);
+                    const newGrande = Number(updated.price?.grande ?? 0);
                     const response = await fetch(`${API_BASE}/api/admin/menu/${it.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -854,6 +1626,15 @@ function openMenuModal(item) {
                     const result = await response.json().catch(() => ({}));
                     if (!response.ok) throw new Error(result.error || `Update failed (HTTP ${response.status}).`);
                     menuItems = menuItems.map(x => x.id === it.id ? updated : x);
+
+                    if (oldTall !== newTall || oldGrande !== newGrande) {
+                        recordActivity({
+                            user: 'Admin User',
+                            action: 'Updated menu item',
+                            details: `${updated.name} price changed from ₱${oldTall} / ₱${oldGrande} to ₱${newTall} / ₱${newGrande}.`,
+                            category: 'Menu'
+                        });
+                    }
                 }
                 closeModal();
                 renderMenu();
@@ -890,13 +1671,31 @@ function openMenuModal(item) {
 }
 
 /* ---------- Reports ---------- */
+function syncReportRangeControl() {
+    const reportRange = $('#report-range');
+    if (!reportRange) return;
+    const mappedValue = salesInterval === 'day' ? 'day' : salesInterval;
+    if (reportRange.value !== mappedValue) {
+        reportRange.value = mappedValue;
+    }
+}
+
 function renderReports() {
     applyReportSections();
+    syncReportRangeControl();
     const list = (overviewData.topProducts || []);
     const totalSales = overviewData.todaySales || 0;
     const totalOrders = overviewData.totalOrders || 0;
     const avgVal = Number(overviewData.averageOrderValue || 0);
     const paymentMethods = Array.isArray(overviewData.paymentMethods) ? overviewData.paymentMethods : [];
+    const intervalLabelMap = {
+        day: 'Today',
+        yesterday: 'Yesterday',
+        week: 'This Week',
+        month: 'This Month',
+        year: 'This Year'
+    };
+    const currentLabel = intervalLabelMap[salesInterval] || 'Selected Interval';
 
     $('#rep-total-sales').textContent = peso(totalSales);
     $('#rep-total-tx').textContent    = totalOrders;
@@ -933,7 +1732,7 @@ function renderReports() {
                 <td>${Number(payment.transactions) || 0}</td>
                 <td>${peso(payment.sales || 0)}</td></tr>
         `).join('')
-        : '<tr><td colspan="3" class="empty">No payment transactions recorded today.</td></tr>';
+        : `<tr><td colspan="3" class="empty">No payment transactions recorded for ${currentLabel.toLowerCase()}.</td></tr>`;
 
     destroyChart('hour');
     const hoursLabels = dailyHourLabels;
@@ -978,7 +1777,7 @@ function renderReports() {
     const insStaffTag = $('#ins-staff-tag');
 
     if (totalOrders > 0) {
-        if (insSales) insSales.textContent = `Today's revenue is ${peso(totalSales)} across ${totalOrders} order(s) with an average ticket size of ${peso(avgVal)}.`;
+        if (insSales) insSales.textContent = `${currentLabel} revenue is ${peso(totalSales)} across ${totalOrders} order(s) with an average ticket size of ${peso(avgVal)}.`;
         if (insSalesTag) { insSalesTag.textContent = 'Active Revenue'; insSalesTag.className = 'tag green'; }
 
         if (insPeak) insPeak.textContent = `Most order activity recorded during: ${overviewData.peakTime || 'recent hours'}.`;
@@ -991,7 +1790,7 @@ function renderReports() {
         if (insStaff) insStaff.textContent = `Kitchen order transitions are smooth. Maintain preparation readiness during ${overviewData.peakTime || 'active periods'}.`;
         if (insStaffTag) { insStaffTag.textContent = 'Optimal Prep'; insStaffTag.className = 'tag blue'; }
     } else {
-        if (insSales) insSales.textContent = 'No sales recorded yet for today. Start placing customer orders to view trends.';
+        if (insSales) insSales.textContent = `No sales recorded yet for ${currentLabel.toLowerCase()}. Start placing customer orders to view trends.`;
         if (insSalesTag) { insSalesTag.textContent = 'Awaiting Orders'; insSalesTag.className = 'tag orange'; }
 
         if (insPeak) insPeak.textContent = 'Peak traffic will automatically be calculated as orders come in throughout the day.';
@@ -1007,6 +1806,13 @@ function renderReports() {
 
 // End-of-Day (Z-Reading) Report
 $('#eod-report-btn')?.addEventListener('click', () => {
+    recordActivity({
+        user: 'Admin User',
+        action: 'Exported end-of-day report',
+        details: 'End-of-Day (Z-Reading) report was generated for review/printing.',
+        category: 'Reports'
+    });
+
     const totalSales = overviewData.todaySales || 0;
     const totalOrders = overviewData.totalOrders || 0;
     const avgVal = totalOrders ? (totalSales / totalOrders).toFixed(2) : '0.00';
@@ -1113,39 +1919,156 @@ function downloadReport(content, type, extension) {
     URL.revokeObjectURL(url);
 }
 
-$('#export-rep-btn')?.addEventListener('click', () => {
+function buildPrintableReportHtml(report) {
+    const printableRows = reportRows(report).map(row => `
+        <tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>
+    `).join('');
+    return `<!doctype html><html><head><title>Mango Royal Sales Report</title>
+        <style>body{font:14px Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}
+        table{border-collapse:collapse;width:100%;margin-top:18px}td{border:1px solid #d1d5db;padding:8px}
+        tr:first-child{font-weight:bold;background:#f3f4f6}@media print{button{display:none}}</style>
+        </head><body><h1>Mango Royal Sales Report</h1><p>Generated ${escapeHtml(new Date(report.generatedAt).toLocaleString())}</p>
+        <table>${printableRows}</table><button onclick="window.print()">Print / Save as PDF</button></body></html>`;
+}
+
+function openPrintableReport(report) {
+    const windowRef = window.open('', '_blank', 'width=900,height=700');
+    if (!windowRef) return alert('Popups blocked. Allow popups to print or save the report.');
+    windowRef.document.write(buildPrintableReportHtml(report));
+    windowRef.document.close();
+    return windowRef;
+}
+
+function runReportExport(mode = 'digital') {
     const report = getReportExportData();
-    if (adminSettings.defaultFormat === 'json') {
-        downloadReport(JSON.stringify(report, null, 2), 'application/json', 'json');
-        return;
+    const doDigital = mode === 'digital' || mode === 'digital-print';
+    const doPrint = mode === 'print' || mode === 'digital-print';
+    const exportLabel = mode === 'digital' ? 'Digital Export' : mode === 'print' ? 'Print' : 'Digital + Print Export';
+
+    recordActivity({
+        user: 'Admin User',
+        action: 'Exported sales report',
+        details: `Sales report was exported via ${exportLabel}.`,
+        category: 'Reports'
+    });
+
+    if (doDigital) {
+        if (adminSettings.defaultFormat === 'json') {
+            downloadReport(JSON.stringify(report, null, 2), 'application/json', 'json');
+        } else if (adminSettings.defaultFormat === 'pdf') {
+            openPrintableReport(report);
+        } else {
+            downloadReport(reportCsv(report), 'text/csv;charset=utf-8', 'csv');
+        }
     }
-    if (adminSettings.defaultFormat === 'pdf') {
-        const printableRows = reportRows(report).map(row => `
-            <tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>
+
+    if (doPrint) {
+        openPrintableReport(report);
+    }
+}
+
+const exportRepButton = $('#export-rep-btn');
+if (exportRepButton) {
+    const exportWrap = document.createElement('div');
+    exportWrap.className = 'report-export-wrap';
+    exportRepButton.parentNode.insertBefore(exportWrap, exportRepButton);
+    exportWrap.appendChild(exportRepButton);
+
+    const exportMenu = document.createElement('div');
+    exportMenu.className = 'report-export-menu';
+    exportMenu.innerHTML = `
+        <button type="button" class="report-export-option is-primary" data-export-mode="digital">Digital Export</button>
+        <button type="button" class="report-export-option" data-export-mode="print">Print</button>
+        <button type="button" class="report-export-option is-danger" data-export-mode="digital-print">Digital + Print Export</button>
+    `;
+    exportWrap.appendChild(exportMenu);
+
+    const toggleMenu = () => {
+        const isOpen = exportWrap.classList.contains('open');
+        document.querySelectorAll('.report-export-wrap').forEach(item => item.classList.remove('open'));
+        if (!isOpen) exportWrap.classList.add('open');
+        exportRepButton.setAttribute('aria-expanded', String(exportWrap.classList.contains('open')));
+    };
+
+    exportRepButton.addEventListener('click', event => {
+        event.stopPropagation();
+        toggleMenu();
+    });
+
+    exportMenu.querySelectorAll('[data-export-mode]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            runReportExport(button.dataset.exportMode);
+            closeReportExportMenu();
+        });
+    });
+
+    function closeReportExportMenu() {
+        document.querySelectorAll('.report-export-wrap').forEach(item => item.classList.remove('open'));
+        exportRepButton.setAttribute('aria-expanded', 'false');
+    }
+
+    document.addEventListener('click', event => {
+        if (!exportWrap.contains(event.target)) closeReportExportMenu();
+    });
+}
+
+/* ---------- Activity Log ---------- */
+function renderActivityLog() {
+    const tbody = $('#activity-table tbody');
+    const total = activityLogs.length;
+    const menu = activityLogs.filter(item => item.category === 'Menu').length;
+    const system = activityLogs.filter(item => item.category === 'System').length;
+    const today = activityLogs.filter(item => item.timestamp.toDateString() === new Date().toDateString()).length;
+
+    $('#activity-total').textContent = total;
+    $('#activity-menu').textContent = menu;
+    $('#activity-system').textContent = system;
+    $('#activity-today').textContent = today;
+
+    tbody.innerHTML = activityLogs
+        .slice()
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .map(log => `
+            <tr>
+                <td>${log.timestamp.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                <td>${escapeHtml(log.user)}</td>
+                <td>${escapeHtml(log.action)}</td>
+                <td>${escapeHtml(log.details)}</td>
+                <td><span class="pill ${log.category.toLowerCase()}">${escapeHtml(log.category)}</span></td>
+            </tr>
         `).join('');
-        const windowRef = window.open('', '_blank', 'width=900,height=700');
-        if (!windowRef) return alert('Popups blocked. Allow popups to print or save the report as PDF.');
-        windowRef.document.write(`<!doctype html><html><head><title>Mango Royal Sales Report</title>
-            <style>body{font:14px Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}
-            table{border-collapse:collapse;width:100%;margin-top:18px}td{border:1px solid #d1d5db;padding:8px}
-            tr:first-child{font-weight:bold;background:#f3f4f6}@media print{button{display:none}}</style>
-            </head><body><h1>Mango Royal Sales Report</h1><p>Generated ${escapeHtml(new Date(report.generatedAt).toLocaleString())}</p>
-            <table>${printableRows}</table><button onclick="window.print()">Print / Save as PDF</button></body></html>`);
-        windowRef.document.close();
-        return;
-    }
-    downloadReport(reportCsv(report), 'text/csv;charset=utf-8', 'csv');
-});
+}
+$('#activity-refresh')?.addEventListener('click', renderActivityLog);
 
 /* ---------- Users ---------- */
 function renderUsers() {
-    const active = users.filter(u => u.status === 'Active').length;
-    $('#usr-total').textContent    = users.length;
+    const active = users.filter(u => u.status === 'Active' && !u.archived).length;
+    const archivedCount = archivedUsers.length;
+    const visibleUsers = showArchivedUsers ? archivedUsers : users.filter(u => !u.archived);
+
+    $('#usr-total').textContent    = users.length + archivedUsers.length;
     $('#usr-active').textContent   = active;
     $('#usr-inactive').textContent = users.length - active;
+    const archiveToggle = $('#user-archive-toggle');
+    const archiveBadge = $('#user-archive-badge');
+    if (archiveToggle) {
+        archiveToggle.classList.toggle('is-active', showArchivedUsers);
+        archiveToggle.setAttribute('aria-pressed', String(showArchivedUsers));
+        const icon = archiveToggle.querySelector('.menu-archive-icon');
+        const text = archiveToggle.querySelector('.menu-archive-text');
+        if (showArchivedUsers) {
+            if (icon) icon.textContent = '←';
+            if (text) text.textContent = 'Back';
+        } else {
+            if (icon) icon.textContent = 'A';
+            if (text) text.textContent = 'Archived';
+        }
+    }
+    if (archiveBadge) archiveBadge.textContent = archivedCount;
 
     const roleCls = { Admin:'admin', Manager:'manager', Cashier:'cashier', 'Kitchen Staff':'kitchen' };
-    $('#user-table tbody').innerHTML = users.map(u => `
+    $('#user-table tbody').innerHTML = visibleUsers.map(u => `
         <tr>
             <td><b>${u.id}</b></td>
             <td>${u.name}</td>
@@ -1154,28 +2077,75 @@ function renderUsers() {
             <td><span class="pill ${u.status.toLowerCase()}">${u.status}</span></td>
             <td>${u.lastLogin.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
             <td>
-                <button class="btn btn-sm btn-ghost" data-u-toggle="${u.id}">${u.status==='Active'?'Deactivate':'Activate'}</button>
-                <button class="btn btn-sm btn-info" data-u-edit="${u.id}">Edit</button>
-                <button class="btn btn-sm btn-danger" data-u-del="${u.id}">✕</button>
+                ${showArchivedUsers ? '<button class="btn btn-sm btn-ghost" data-u-restore="' + u.id + '">Restore</button>' : `
+                    <button class="btn btn-sm btn-ghost" data-u-toggle="${u.id}">${u.status==='Active'?'Deactivate':'Activate'}</button>
+                    <button class="btn btn-sm btn-info" data-u-edit="${u.id}">Edit</button>
+                    <button class="btn btn-sm btn-danger" data-u-del="${u.id}" title="Archive user">A</button>
+                `}
             </td>
         </tr>
     `).join('');
 
     $$('[data-u-toggle]').forEach(b => b.addEventListener('click', () => {
         const u = users.find(x => x.id === b.dataset.uToggle);
+        if (!u) return;
         u.status = u.status === 'Active' ? 'Inactive' : 'Active';
         renderUsers();
     }));
     $$('[data-u-edit]').forEach(b => b.addEventListener('click', () => openUserModal(users.find(x => x.id === b.dataset.uEdit))));
     $$('[data-u-del]').forEach(b => b.addEventListener('click', () => {
         const u = users.find(x => x.id === b.dataset.uDel);
-        if (confirm(`Delete user "${u.name}"?`)) {
-            users = users.filter(x => x.id !== u.id);
-            renderUsers();
-        }
+        if (!u) return;
+        openModal('Archive User', `
+            <div class="archive-confirmation">
+                <div class="archive-confirmation-icon" aria-hidden="true">A</div>
+                <div class="archive-confirmation-copy">
+                    <h4>Archive "${escapeHtml(u.name)}"?</h4>
+                    <p>This will keep the user record on file but remove them from active access.</p>
+                </div>
+            </div>
+        `, [
+            { label: 'Cancel', cls: 'btn-ghost', action: closeModal },
+            {
+                label: 'Archive User',
+                cls: 'btn btn-danger',
+                action: () => {
+                    closeModal();
+                    const archivedEntry = { ...u, archived: true, status: 'Archived' };
+                    archivedUsers.unshift(archivedEntry);
+                    users = users.filter(x => x.id !== u.id);
+                    renderUsers();
+                    recordActivity({
+                        user: 'Admin User',
+                        action: 'Archived user',
+                        details: `${u.name} was archived and removed from active access.`,
+                        category: 'Users'
+                    });
+                }
+            }
+        ]);
+    }));
+    $$('[data-u-restore]').forEach(b => b.addEventListener('click', () => {
+        const u = archivedUsers.find(x => x.id === b.dataset.uRestore);
+        if (!u) return;
+        const restoredUser = { ...u, archived: false, status: 'Active' };
+        users.push(restoredUser);
+        archivedUsers = archivedUsers.filter(x => x.id !== u.id);
+        showArchivedUsers = false;
+        renderUsers();
+        recordActivity({
+            user: 'Admin User',
+            action: 'Restored archived user',
+            details: `${u.name} was restored and returned to active access.`,
+            category: 'Users'
+        });
     }));
 }
 $('#user-add').addEventListener('click', () => openUserModal(null));
+$('#user-archive-toggle')?.addEventListener('click', () => {
+    showArchivedUsers = !showArchivedUsers;
+    renderUsers();
+});
 
 function openUserModal(user) {
     const isNew = !user;
@@ -1201,7 +2171,7 @@ function openUserModal(user) {
             if (isNew) {
                 const prefix = role === 'Admin' ? 'A' : role === 'Cashier' ? 'C' : role === 'Kitchen Staff' ? 'K' : 'M';
                 const n = users.filter(x => x.id.startsWith(prefix)).length + 1;
-                users.push({ id: `${prefix}-${String(n).padStart(3,'0')}`, name, email, role, status, lastLogin: new Date() });
+                users.push({ id: `${prefix}-${String(n).padStart(3,'0')}`, name, email, role, status, lastLogin: new Date(), archived: false });
             } else {
                 Object.assign(u, { name, email, role, status });
             }
@@ -1286,7 +2256,7 @@ function sendInsightQuestion(question) {
     $('#assistant-welcome')?.remove();
     $('#assistant-prompts')?.remove();
     appendAssistantMessage(message, 'user');
-    const thinking = appendAssistantMessage('Checking today’s dashboard data…', 'thinking');
+    const thinking = appendAssistantMessage("Checking today's dashboard data...", 'thinking');
     window.setTimeout(() => {
         thinking.remove();
         appendAssistantMessage(answerAnalyticsQuestion(message), 'assistant');
@@ -1342,7 +2312,7 @@ window.addEventListener('resize', () => {
 });
 
 /* ---------- Initialization ---------- */
-switchView('dashboard');
+switchView(getStoredAdminView());
 loadAdminSettings();
 loadTransactionsData();
 loadMenuData();

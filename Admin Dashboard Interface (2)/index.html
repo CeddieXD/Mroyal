@@ -23,6 +23,7 @@
             <button class="nav-item" data-view="transactions"><span class="ico">🧾</span><span>Transactions</span></button>
             <button class="nav-item" data-view="menu"><span class="ico">🍽</span><span>Menu Management</span></button>
             <button class="nav-item" data-view="reports"><span class="ico">📄</span><span>Reports</span></button>
+            <button class="nav-item" data-view="activity"><span class="ico">🕘</span><span>Activity Log</span></button>
             <button class="nav-item" data-view="users"><span class="ico">👥</span><span>Users</span></button>
             <button class="nav-item" data-view="settings"><span class="ico">⚙</span><span>Settings</span></button>
         </nav>
@@ -34,57 +35,102 @@
     <main class="main">
         <!-- ============ DASHBOARD ============ -->
         <section class="view active" id="view-dashboard">
+            <div class="dashboard-header">
+                <div>
+                    <h2>Dashboard</h2>
+                </div>
+                <div class="dashboard-meta">
+                    <div class="dashboard-interval-control interval-dropdown" data-target="sales-interval">
+                        <span class="interval-label">Interval</span>
+                        <button type="button" class="interval-trigger" aria-haspopup="listbox" aria-expanded="false">
+                            <span class="interval-value">Today · hourly</span>
+                            <span class="interval-caret">▾</span>
+                        </button>
+                        <div class="interval-menu" role="listbox" aria-label="Sales analytics interval">
+                            <button type="button" class="interval-option active" data-value="day">Today · hourly</button>
+                            <button type="button" class="interval-option" data-value="yesterday">Yesterday</button>
+                            <button type="button" class="interval-option" data-value="week">Last 7 days</button>
+                            <button type="button" class="interval-option" data-value="month">Month to date · daily</button>
+                            <button type="button" class="interval-option" data-value="year">Year to date · monthly</button>
+                        </div>
+                        <select id="sales-interval" aria-label="Sales analytics interval" hidden>
+                            <option value="day" selected>Today · hourly</option>
+                            <option value="yesterday">Yesterday</option>
+                            <option value="week">Last 7 days</option>
+                            <option value="month">Month to date · daily</option>
+                            <option value="year">Year to date · monthly</option>
+                        </select>
+                    </div>
+                    <span class="meta-chip">Updated: Today</span>
+                </div>
+            </div>
             <div class="dash-grid">
                 <div class="col-left">
-                    <div class="card card-sales-chart">
+                    <div class="card card-sales-chart" draggable="true" data-card-type="sales-chart" data-card-label="Sales Analytics">
                         <div class="sales-chart-head">
                             <h3>Sales Analytics</h3>
-                            <label class="sales-interval-control" for="sales-interval">
-                                <span>Interval</span>
-                                <select id="sales-interval" aria-label="Sales analytics interval">
-                                    <option value="day">Today · hourly</option>
-                                    <option value="week">Last 7 days</option>
-                                    <option value="month" selected>Month to date · daily</option>
-                                    <option value="year">Year to date · monthly</option>
-                                </select>
-                            </label>
                         </div>
-                        <p class="sales-chart-summary" id="sales-chart-summary" aria-live="polite"></p>
                         <div class="chart-wrap"><canvas id="chart-sales"></canvas></div>
                     </div>
-                    <div class="stat-grid">
-                        <div class="card stat"><div class="stat-head"><span>Today's Sales</span><span class="ico green">↗</span></div><p class="stat-big" id="stat-sales"></p></div>
-                        <div class="card stat"><div class="stat-head"><span>Total Orders</span><span class="ico blue">🛒</span></div><p class="stat-big" id="stat-orders"></p></div>
-                        <div class="card stat"><div class="stat-head"><span>Best Seller</span><span class="ico orange">🍽</span></div><p class="stat-med" id="stat-best"></p></div>
-                        <div class="card stat"><div class="stat-head"><span>Peak Time</span><span class="ico purple">⏱</span></div><p class="stat-med" id="stat-peak"></p></div>
+                    <div class="stat-grid compact-summary-grid">
+                        <div class="card stat stat-graph-card compact-summary-item" draggable="true" data-card-type="todays-sales" data-card-label="Today's Sales">
+                            <div class="stat-head">
+                                <span>Today's Sales</span>
+                            </div>
+                            <div class="stat-value-row">
+                                <div class="stat-main">
+                                    <p class="stat-big" id="stat-sales"></p>
+                                </div>
+                                <div class="stat-sparkline sales-sparkline" id="sales-sparkline" aria-label="Sales line trend">
+                                    <svg viewBox="0 0 110 42" preserveAspectRatio="none" role="img" aria-hidden="true">
+                                        <path class="spark-area" d=""></path>
+                                        <path class="spark-line" d=""></path>
+                                    </svg>
+                                    <span class="stat-tooltip" id="sales-tooltip">+0.0%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card stat stat-graph-card compact-summary-item" draggable="true" data-card-type="total-orders" data-card-label="Total Orders">
+                            <div class="stat-head">
+                                <span>Total Orders</span>
+                            </div>
+                            <div class="stat-value-row">
+                                <div class="stat-main">
+                                    <p class="stat-big" id="stat-orders"></p>
+                                </div>
+                                <div class="stat-sparkline orders-sparkline" id="orders-sparkline" aria-label="Orders line trend">
+                                    <svg viewBox="0 0 110 42" preserveAspectRatio="none" role="img" aria-hidden="true">
+                                        <path class="spark-area" d=""></path>
+                                        <path class="spark-line" d=""></path>
+                                    </svg>
+                                    <span class="stat-tooltip" id="orders-tooltip">+0.0%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card stat compact-summary-item compact-summary-best" draggable="true" data-card-type="best-seller" data-card-label="Best Seller">
+                            <div class="stat-head">
+                                <span>Best Seller</span>
+                                <span class="ico orange">🍽</span>
+                            </div>
+                            <p class="stat-med" id="stat-best"></p>
+                        </div>
                     </div>
                 </div>
                 <div class="col-right">
                     <div class="row-top">
-                        <div class="card card-items-chart">
-                            <h3>Items Sold Today</h3>
-                            <div class="chart-wrap"><canvas id="chart-items"></canvas></div>
-                        </div>
-                        <div class="card weather">
-                            <h3>Weather</h3>
-                            <div class="weather-body">
-                                <div class="weather-icon">☁</div>
-                                <p class="temp">32°C</p>
-                                <p class="cond">Partly Cloudy</p>
-                                <div class="weather-list">
-                                    <div><span>Time</span><span id="w-time"></span></div>
-                                    <div><span>Date</span><span id="w-date"></span></div>
-                                    <div><span>Humidity</span><span>68%</span></div>
-                                    <div><span>Location</span><span>Manila, PH</span></div>
-                                </div>
+                        <div class="card card-items-chart" id="items-sold-card" tabindex="0" role="button" aria-expanded="false" aria-label="Toggle item sales insight" draggable="true" data-card-type="items-sold" data-card-label="Items Sold">
+                            <div class="card-mode-header">
+                                <h3 id="items-sold-title">Items Sold</h3>
+                                <span class="card-mode-badge" id="items-card-badge">Graph</span>
                             </div>
+                            <div class="chart-wrap"><canvas id="chart-items"></canvas></div>
+                            <div class="items-ai-panel" id="items-ai-panel" aria-live="polite"></div>
                         </div>
                     </div>
-                    <div class="card ops-card">
+                    <div class="card ops-card" draggable="true" data-card-type="operations" data-card-label="Today's Operations">
                         <div class="ops-head">
                             <div>
                                 <h3>Today's Operations</h3>
-                                <p>Order health and service mix</p>
                             </div>
                             <span class="today-pill">Today</span>
                         </div>
@@ -110,20 +156,7 @@
                                 <small>orders cancelled</small>
                             </div>
                         </div>
-                        <div class="order-mix">
-                            <div class="order-mix-head">
-                                <b>Order mix</b>
-                                <span id="order-mix-total">0 active orders</span>
-                            </div>
-                            <div class="mix-bar" aria-label="Dine-in and take-out order mix">
-                                <span class="mix-dine-in" id="mix-dine-in"></span>
-                                <span class="mix-take-out" id="mix-take-out"></span>
-                            </div>
-                            <div class="mix-legend">
-                                <span><i class="legend-dot dine-in"></i>Dine-in <b id="mix-dine-in-count">0</b></span>
-                                <span><i class="legend-dot take-out"></i>Take-out <b id="mix-take-out-count">0</b></span>
-                            </div>
-                        </div>
+
                     </div>
                 </div>
             </div>
@@ -133,7 +166,36 @@
         <section class="view" id="view-transactions">
             <div class="page-head">
                 <h2>Transaction Management</h2>
-                <button class="btn btn-primary" id="export-tx-btn">⬇ Export</button>
+                <div class="dashboard-meta">
+                    <div class="dashboard-interval-control interval-dropdown" data-target="tx-time">
+                        <span class="interval-label">Interval</span>
+                        <button type="button" class="interval-trigger" aria-haspopup="listbox" aria-expanded="false">
+                            <span class="interval-value">Today</span>
+                            <span class="interval-caret">▾</span>
+                        </button>
+                        <div class="interval-menu" role="listbox" aria-label="Transaction time filter">
+                            <button type="button" class="interval-option" data-value="all">All Time</button>
+                            <button type="button" class="interval-option active" data-value="today">Today</button>
+                            <button type="button" class="interval-option" data-value="yesterday">Yesterday</button>
+                            <button type="button" class="interval-option" data-value="last7days">Last 7 Days</button>
+                            <button type="button" class="interval-option" data-value="last30days">Last 30 Days</button>
+                            <button type="button" class="interval-option" data-value="morning">Morning (6AM-12PM)</button>
+                            <button type="button" class="interval-option" data-value="afternoon">Afternoon (12PM-6PM)</button>
+                            <button type="button" class="interval-option" data-value="evening">Evening (6PM-6AM)</button>
+                        </div>
+                        <select id="tx-time" aria-label="Transaction time filter" hidden>
+                            <option value="all">All Time</option>
+                            <option value="today" selected>Today</option>
+                            <option value="yesterday">Yesterday</option>
+                            <option value="last7days">Last 7 Days</option>
+                            <option value="last30days">Last 30 Days</option>
+                            <option value="morning">Morning (6AM-12PM)</option>
+                            <option value="afternoon">Afternoon (12PM-6PM)</option>
+                            <option value="evening">Evening (6PM-6AM)</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" id="export-tx-btn">⬇ Export</button>
+                </div>
             </div>
             <div class="stat-row">
                 <div class="card stat"><div class="stat-head"><span>Total Transactions</span><span class="ico blue">🧾</span></div><p class="stat-big" id="tx-count">0</p></div>
@@ -144,7 +206,6 @@
                 <input type="text" id="tx-search" placeholder="🔍 Search by transaction ID or item...">
                 <select id="tx-status"><option value="all">All Status</option><option>Completed</option><option>Pending</option><option>Void</option></select>
                 <select id="tx-payment"><option value="all">All Payment Methods</option><option>Cash</option><option>GCash</option><option>Card</option></select>
-                <select id="tx-time"><option value="all">All Time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="last7days">Last 7 Days</option><option value="last30days">Last 30 Days</option><option value="morning">Morning (6AM-12PM)</option><option value="afternoon">Afternoon (12PM-6PM)</option><option value="evening">Evening (6PM-6AM)</option></select>
                 <select id="tx-day"><option value="all">All Days</option><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select>
             </div>
             <div class="card table-card">
@@ -153,6 +214,11 @@
                     <tbody></tbody>
                 </table>
                 <p class="empty" id="tx-empty" hidden>No transactions found matching your filters.</p>
+                <div class="tx-pagination" aria-label="Transactions pagination">
+                    <button class="page-btn" id="tx-prev-page" type="button">Previous</button>
+                    <div id="tx-page-indicator" class="tx-page-indicator">Page 1</div>
+                    <button class="page-btn" id="tx-next-page" type="button">Next</button>
+                </div>
             </div>
         </section>
 
@@ -163,7 +229,14 @@
                     <h2>Menu Management</h2>
                     <p>Keep your products, prices, and availability up to date.</p>
                 </div>
-                <button class="btn btn-primary" id="menu-add"><span aria-hidden="true">＋</span> Add New Item</button>
+                <div class="menu-page-actions">
+                    <button class="menu-archive-toggle" id="menu-archive-toggle" type="button" aria-pressed="false" aria-label="View archived menu items">
+                        <span class="menu-archive-icon" aria-hidden="true">A</span>
+                        <span class="menu-archive-text">Archived</span>
+                        <span class="menu-archive-badge" id="menu-archive-badge">0</span>
+                    </button>
+                    <button class="btn btn-primary" id="menu-add"><span aria-hidden="true">＋</span> Add New Item</button>
+                </div>
             </div>
             <div class="menu-toolbar">
                 <div class="chip-row" id="menu-chips" role="group" aria-label="Filter menu by category"></div>
@@ -176,13 +249,22 @@
         <section class="view" id="view-reports">
             <div class="page-head">
                 <h2>Sales Report &amp; Analytics</h2>
-                <div class="hstack">
-                    <select id="report-range"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This Week</option><option value="month">This Month</option><option value="year">This Year</option></select>
+                <div class="hstack report-toolbar">
+                    <div class="report-range-control">
+                        <span>Interval</span>
+                        <select id="report-range">
+                            <option value="day">Today</option>
+                            <option value="yesterday">Yesterday</option>
+                            <option value="week">This Week</option>
+                            <option value="month">This Month</option>
+                            <option value="year">This Year</option>
+                        </select>
+                    </div>
                     <button class="btn btn-ghost" id="eod-report-btn">📄 End-of-Day (Z-Reading)</button>
                     <button class="btn btn-primary" id="export-rep-btn">⬇ Export Report</button>
                 </div>
             </div>
-            <div class="card" id="report-sales-summary">
+            <div class="card report-panel" id="report-sales-summary">
                 <h3>Basic Sales Report</h3>
                 <div class="report-basic">
                     <div class="rep-tile orange"><p>Total Sales</p><p class="big" id="rep-total-sales">₱0</p><p class="sub">Current revenue</p></div>
@@ -230,11 +312,40 @@
             </div>
         </section>
 
+        <!-- ============ ACTIVITY LOG ============ -->
+        <section class="view" id="view-activity">
+            <div class="page-head">
+                <h2>Activity Log</h2>
+                <button class="btn btn-primary" id="activity-refresh">↻ Refresh</button>
+            </div>
+            <div class="stat-row four">
+                <div class="card stat"><div class="stat-head"><span>Total Events</span><span class="ico blue">🕘</span></div><p class="stat-big" id="activity-total">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Menu Changes</span><span class="ico orange">🍽</span></div><p class="stat-big" id="activity-menu">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>System Updates</span><span class="ico purple">⚙</span></div><p class="stat-big" id="activity-system">0</p></div>
+                <div class="card stat"><div class="stat-head"><span>Today</span><span class="ico green">✓</span></div><p class="stat-big" id="activity-today">0</p></div>
+            </div>
+            <div class="card table-card">
+                <table class="table" id="activity-table">
+                    <thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Details</th><th>Category</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
         <!-- ============ USERS ============ -->
         <section class="view" id="view-users">
             <div class="page-head">
-                <h2>User &amp; Role Management</h2>
-                <button class="btn btn-primary" id="user-add">+ Add New User</button>
+                <div class="menu-page-title">
+                    <h2>User &amp; Role Management</h2>
+                </div>
+                <div class="menu-page-actions">
+                    <button class="menu-archive-toggle" id="user-archive-toggle" type="button" aria-pressed="false" aria-label="View archived users">
+                        <span class="menu-archive-icon" aria-hidden="true">A</span>
+                        <span class="menu-archive-text">Archived</span>
+                        <span class="menu-archive-badge" id="user-archive-badge">0</span>
+                    </button>
+                    <button class="btn btn-primary" id="user-add">+ Add New User</button>
+                </div>
             </div>
             <div class="stat-row four">
                 <div class="card stat"><div class="stat-head"><span>Total Users</span><span class="ico blue">👥</span></div><p class="stat-big" id="usr-total">0</p></div>
@@ -321,7 +432,7 @@
     <div class="assistant-dock" id="royal-assistant" hidden>
         <button class="assistant-capsule" id="assistant-open" type="button" aria-expanded="false" aria-controls="assistant-panel">
             <span class="assistant-mark" aria-hidden="true">R</span>
-            <span class="assistant-capsule-copy"><b>Royal Insights</b><small>Ask about today's business</small></span>
+            <span class="assistant-capsule-copy"><b>Royal Insights</b><small>Drag a card here or ask anything</small></span>
             <span class="assistant-capsule-arrow" aria-hidden="true">↑</span>
         </button>
         <section class="assistant-panel" id="assistant-panel" aria-label="Royal Insights chat" aria-hidden="true">
@@ -330,13 +441,26 @@
                     <span class="assistant-mark" aria-hidden="true">R</span>
                     <div><b>Royal Insights</b><small>Answers from your live dashboard data</small></div>
                 </div>
-                <button class="assistant-close" id="assistant-close" type="button" aria-label="Minimize Royal Insights">−</button>
+                <div class="assistant-header-actions">
+                    <button class="assistant-history-btn" id="assistant-history-btn" type="button" aria-label="View conversation history" title="History">🕑</button>
+                    <button class="assistant-close" id="assistant-close" type="button" aria-label="Minimize Royal Insights">−</button>
+                </div>
             </header>
+
+            <!-- History panel (hidden by default, toggled over messages) -->
+            <div class="assistant-history-panel" id="assistant-history-panel" hidden aria-label="Conversation history">
+                <div class="assistant-history-head">
+                    <span>Recent conversations</span>
+                    <button class="assistant-history-clear" id="assistant-history-clear" type="button">Clear all</button>
+                </div>
+                <div class="assistant-history-list" id="assistant-history-list"></div>
+            </div>
+
             <div class="assistant-messages" id="assistant-messages" aria-live="polite" aria-relevant="additions">
                 <div class="assistant-welcome" id="assistant-welcome">
                     <span class="assistant-welcome-mark" aria-hidden="true">✦</span>
                     <h2>What would you like to know?</h2>
-                    <p>Ask about today's sales, orders, best sellers, or busy hours.</p>
+                    <p>Ask a question, or <strong>drag any dashboard card</strong> here to analyze it.</p>
                 </div>
                 <div class="assistant-prompts" id="assistant-prompts">
                     <button type="button">How are sales today?</button>
@@ -344,11 +468,20 @@
                     <button type="button">How many orders are in progress?</button>
                 </div>
             </div>
+
+            <!-- Drop zone overlay — shown while dragging a card -->
+            <div class="assistant-drop-zone" id="assistant-drop-zone" aria-hidden="true">
+                <div class="assistant-drop-hint">
+                    <span class="assistant-drop-icon">📊</span>
+                    <span>Drop card to analyze</span>
+                </div>
+            </div>
+
             <form class="assistant-composer" id="assistant-form">
-                <input id="assistant-input" type="text" autocomplete="off" aria-label="Ask Royal Insights" placeholder="Ask about your business...">
+                <input id="assistant-input" type="text" autocomplete="off" aria-label="Ask Royal Insights" placeholder="Ask about your business or drop a card…">
                 <button type="submit" aria-label="Send message">↑</button>
             </form>
-            <p class="assistant-disclaimer">Insights reflect dashboard data for today; this is not an external AI service.</p>
+            <p class="assistant-disclaimer">Powered by Groq AI · Drag cards to analyze · Answers reflect live data</p>
         </section>
     </div>
 
@@ -372,7 +505,10 @@
         authScript.src = `${window.MANGO_ROYAL_STAFF_APP.apiBase}/staff-auth/staff-auth.js`;
         authScript.onerror = () => {
             document.documentElement.classList.remove('staff-auth-pending');
-            document.body.textContent = 'The sign-in service is unavailable. Start the backend and reload this page.';
+            const note = document.createElement('div');
+            note.textContent = 'The sign-in service is unavailable. Start the backend and reload this page.';
+            note.style.cssText = 'padding: 24px; color: #0f172a; font-family: sans-serif;';
+            document.body.appendChild(note);
         };
         document.body.appendChild(authScript);
     </script>

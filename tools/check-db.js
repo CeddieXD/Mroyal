@@ -37,6 +37,9 @@ async function verifyAndInitDB() {
     await connection.end();
   } catch (err) {
     console.error('MySQL Connection Warning / Error:', err.message);
+    console.log(`MySQL is not running, not installed, or the connection details in .env are incorrect.`);
+    console.log(`Expected database: ${database} at ${host}:${process.env.DB_PORT || 3306}`);
+    console.log('Start MySQL locally and initialize the schema before using the app features that depend on the database.');
     console.log('Continuing to backend startup...');
   }
 }
