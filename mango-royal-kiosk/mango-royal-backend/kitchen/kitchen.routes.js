@@ -6,7 +6,7 @@
 const express = require('express');
 const db = require('../config/db');
 const bus = require('../pos/events');
-const { ensureAuditTable, writeOrderStatusAudit } = require('../audit-logs');
+const { ensureAuditTable, normalizeAddOns, writeOrderStatusAudit } = require('../audit-logs');
 
 const router = express.Router();
 
@@ -61,8 +61,8 @@ async function loadKitchenOrders() {
 
     const ids = orderRows.map(o => o.order_id);
     const [itemRows] = await db.query(
-        `SELECT oi.order_item_id, oi.order_id, oi.quantity,
-                pv.size_name, p.name, p.image_url
+        `SELECT oi.order_item_id, oi.order_id, oi.quantity, oi.add_ons,
+                pv.size_name, p.name, p.image_url, p.bundle_quantity
          FROM order_items oi
          JOIN product_variants pv ON pv.variant_id = oi.variant_id
          JOIN products p ON p.product_id = pv.product_id
@@ -85,6 +85,8 @@ async function loadKitchenOrders() {
                 image: imageUrl(i.image_url),
                 size: i.size_name,
                 quantity: i.quantity,
+                bundleQuantity: Number(i.bundle_quantity) || 1,
+                addOns: normalizeAddOns(i.add_ons),
             })),
     }));
 }

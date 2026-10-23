@@ -24,9 +24,15 @@ The app can be opened at the server's LAN IP and port, for example `https://192.
 
 The kiosk server proxies `/api` requests to the backend on port 3000 by default, so HTTPS pages do not make blocked HTTP API calls. The backend must be running on the same PC; set `BACKEND_HOST` or `BACKEND_PORT` if it is elsewhere.
 
+The customer kiosk launcher enables live reload for local development: save a file under `public` and open kiosk pages refresh automatically. The development server disables the kiosk service worker to prevent cached files from masking edits.
+
 ## Inactivity reset
 
-After 15 seconds without interaction during an order, the kiosk replaces the current screen with a 10-second countdown prompt. Touching the screen resumes the order; if the countdown reaches zero, the cart is cleared and the kiosk returns to the start screen.
+After 3 minutes without touch, key input, or cursor movement during an order, the kiosk replaces the current screen with a 10-second countdown prompt. Interacting with the kiosk resumes the order; if the countdown reaches zero, the cart is cleared and the kiosk returns to the start screen. Orders are take-out only.
+
+## Add-ons and toppings
+
+Customers can order up to 20 shakes per order and choose up to 10 total toppings per shake. If a customer tries to exceed 20 shakes, the kiosk displays a bulk-order prompt asking them to communicate with management for larger orders. Add-on prices are included in the per-item price and order total. Selections are saved with the order and shown to POS, kitchen, and admin staff. The backend adds the `order_items.add_ons` column automatically when needed; fresh database setups include it in `database_reset.sql`.
 
 ## Order item audit history
 

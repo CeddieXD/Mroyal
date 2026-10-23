@@ -1,69 +1,75 @@
 // js/cart.js — persistent sidebar cart
 
 export function initCart({ onCheckout } = {}) {
+    const MAX_ORDER_QUANTITY = 20;
     const itemsList = document.getElementById('cart-items-list');
     const subtotalEl = document.getElementById('subtotal');
     const totalEl = document.getElementById('total-price');
     const countEl = document.getElementById('cart-count');
     const checkoutBtn = document.getElementById('checkout-btn');
 
-    // Each entry: { key, product_id, name, img, size, variant_id, price, quantity }
+    // Each entry includes the per-unit price with toppings and the topping selection.
     let cartItems = [];
+    let onBulkOrderAttempt = () => {};
 
-    const keyOf = (product_id, size) => `${product_id}::${size}`;
+    const keyOf = (product_id, size, addOns) =>
+        `${product_id}::${size}::${addOns.map(addon => `${addon.name}:${addon.quantity}`).join('|')}`;
+    const getItemCount = () => cartItems.reduce(
+        (sum, item) => sum + item.quantity * (item.bundle_quantity || 1), 0
+    );
+    const formatAddons = (addOns) => addOns
+        .map(addon => `${addon.name}${addon.quantity > 1 ? ` ×${addon.quantity}` : ''}`)
+        .join(', ');
 
     const render = () => {
+        const count = getItemCount();
         if (cartItems.length === 0) {
             itemsList.innerHTML = `
                 <div class="cart-empty">
-                    <div class="cart-empty-icon">🥭</div>
-                    <p>Your cart is empty</p>
+                    <div class="cart-empty-icon" aria-hidden="true">🥤</div>
+                    <p>Your cup is empty</p>
                     <small>Tap a shake to add it here</small>
                 </div>`;
         } else {
             itemsList.innerHTML = '';
-            cartItems.forEach((item, index) => {
+            cartItems.forEach(item => {
                 const el = document.createElement('div');
                 el.className = 'cart-item';
                 el.innerHTML = `
                     <div class="thumb"><img src="assets/img/${item.img}" alt=""></div>
                     <div class="item-info">
                         <h4>${item.name}</h4>
-                        <div class="item-meta">${item.size}</div>
+                        <div class="item-meta">${item.bundle_quantity > 1 ? `${item.bundle_quantity} Tall cups/bundle · ${item.quantity} bundle${item.quantity === 1 ? '' : 's'}` : `${item.size} · Qty ${item.quantity}`}${item.addOns.length ? ` · ${formatAddons(item.addOns)}` : ''}</div>
                         <span class="price">₱${(item.price * item.quantity).toFixed(2)}</span>
                     </div>
-                    <div class="quantity-controls">
-                        <button class="minus" aria-label="decrease">−</button>
-                        <span class="qty-number">${item.quantity}</span>
-                        <button class="plus" aria-label="increase">+</button>
-                    </div>`;
-                el.querySelector('.minus').onclick = () => updateQty(index, -1);
-                el.querySelector('.plus').onclick = () => updateQty(index, 1);
+                    `;
                 itemsList.appendChild(el);
             });
         }
 
         const subtotal = cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
-        const count = cartItems.reduce((s, i) => s + i.quantity, 0);
         subtotalEl.innerText = `₱${subtotal.toFixed(2)}`;
         totalEl.innerText = `₱${subtotal.toFixed(2)}`;
-        countEl.innerText = `${count} item${count === 1 ? '' : 's'}`;
+        countEl.innerText = `${count} cup${count === 1 ? '' : 's'}`;
         checkoutBtn.disabled = count === 0;
     };
 
-    const updateQty = (index, delta) => {
-        cartItems[index].quantity += delta;
-        if (cartItems[index].quantity <= 0) cartItems.splice(index, 1);
-        render();
-    };
-
-    const addItem = ({ product_id, name, img, size, variant_id, price, quantity }) => {
-        const k = keyOf(product_id, size);
+    const addItem = ({ product_id, name, img, size, variant_id, basePrice, price, addOns = [], quantity, bundle_quantity = 1 }) => {
+        const availableQuantity = Math.floor((MAX_ORDER_QUANTITY - getItemCount()) / bundle_quantity);
+        if (availableQuantity <= 0) {
+            onBulkOrderAttempt();
+            return;
+        }
+        const acceptedQuantity = Math.min(quantity, availableQuantity);
+        const k = keyOf(product_id, size, addOns);
         const existing = cartItems.find(i => i.key === k);
         if (existing) {
-            existing.quantity += quantity;
+            existing.quantity += acceptedQuantity;
         } else {
-            cartItems.push({ key: k, product_id, name, img, size, variant_id, price, quantity });
+            cartItems.push({ key: k, product_id, name, img, size, variant_id, basePrice, price, addOns, quantity: acceptedQuantity, bundle_quantity });
+        }
+        if (acceptedQuantity < quantity) {
+            onBulkOrderAttempt();
         }
         render();
         // Little pulse on cart to signal add
@@ -71,6 +77,22 @@ export function initCart({ onCheckout } = {}) {
             [{ transform: 'scale(1)' }, { transform: 'scale(1.02)' }, { transform: 'scale(1)' }],
             { duration: 250 }
         );
+    };
+
+    const updateItem = (index, item) => {
+        if (!cartItems[index]) return;
+        const quantityWithoutItem = getItemCount() -
+            cartItems[index].quantity * (cartItems[index].bundle_quantity || 1);
+        if (quantityWithoutItem + item.quantity * (item.bundle_quantity || 1) > MAX_ORDER_QUANTITY) {
+            onBulkOrderAttempt();
+            return;
+        }
+        cartItems[index] = {
+            ...cartItems[index],
+            ...item,
+            key: keyOf(item.product_id, item.size, item.addOns),
+        };
+        render();
     };
 
     checkoutBtn.onclick = () => {
@@ -83,5 +105,12 @@ export function initCart({ onCheckout } = {}) {
 
     render();
 
-    return { addItem, clear, getSnapshot, render };
+    return {
+        addItem,
+        updateItem,
+        clear,
+        getSnapshot,
+        render,
+        setBulkOrderPrompt: callback => { onBulkOrderAttempt = callback; },
+    };
 }

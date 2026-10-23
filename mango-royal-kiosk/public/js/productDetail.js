@@ -1,40 +1,126 @@
 // js/productDetail.js
 export function initProductDetail({ onAddToCart } = {}) {
+    const MAX_SHAKE_QUANTITY = 20;
+    const MAX_ADDON_QUANTITY = 10;
     const productDetail = document.getElementById('product-detail');
     const detailImg = document.getElementById('detail-img');
     const qtyVal = document.getElementById('qty-val');
     const sizeBtns = productDetail.querySelectorAll('.size-btn');
+    const addonChoices = productDetail.querySelectorAll('.addon-choice');
     const priceDisplay = productDetail.querySelector('.detail-price');
     const addBtn = productDetail.querySelector('.add-to-cart-big');
+    const nextBtn = productDetail.querySelector('#next-to-addons');
+    const shakeStep = productDetail.querySelector('#shake-step');
+    const addonsStep = productDetail.querySelector('#addons-step');
+    const headingQty = productDetail.querySelector('.detail-heading-qty');
+
+    const stepTitle   = productDetail.querySelector('#detail-step-title');
+    const detailDesc  = productDetail.querySelector('#detail-desc');
+    const API_BASE = window.API_BASE || window.location.origin;
 
     let lastClickedImg = null;
     let currentProduct = null;
+    let editingIndex = null;
+    let onSaveEdit = null;
+    let onCancelEdit = null;
+    let onBulkOrderAttempt = () => {};
 
     const getSelectedSize = () => {
         const active = productDetail.querySelector('.size-btn.active');
         return active ? active.innerText : 'Tall';
     };
 
+    const selectedAddons = () => Array.from(addonChoices)
+        .map(choice => ({
+            name: choice.dataset.addonName,
+            price: Number(choice.dataset.price),
+            quantity: Number(choice.querySelector('[data-addon-quantity]').textContent),
+        }))
+        .filter(addon => addon.quantity > 0);
+
+    const loadAddonPrices = async () => {
+        const response = await fetch(`${API_BASE}/api/add-ons`);
+        if (!response.ok) throw new Error(`Add-on price request failed with status ${response.status}`);
+        const addons = await response.json();
+        if (!Array.isArray(addons)) throw new Error('Add-on price response is invalid.');
+
+        const pricesByName = new Map(addons.map(addon => [addon.name, Number(addon.price)]));
+        addonChoices.forEach(choice => {
+            const price = pricesByName.get(choice.dataset.addonName);
+            if (price === undefined || !Number.isFinite(price)) {
+                throw new Error(`Missing database price for add-on "${choice.dataset.addonName}".`);
+            }
+            choice.dataset.price = String(price);
+            choice.querySelector('strong').textContent = `₱${price}`;
+        });
+        updateTotalPrice(Number(qtyVal.textContent));
+    };
+
+    const updateAddonControls = () => {
+        const addonCount = selectedAddons().reduce((sum, addon) => sum + addon.quantity, 0);
+        addonChoices.forEach(choice => {
+            const quantityEl = choice.querySelector('[data-addon-quantity]');
+            const quantity = Number(quantityEl.textContent);
+            choice.querySelector('[data-addon-delta="-1"]').disabled = quantity === 0;
+            choice.querySelector('[data-addon-delta="1"]').disabled =
+                quantity >= MAX_ADDON_QUANTITY || addonCount >= MAX_ADDON_QUANTITY;
+        });
+    };
+
     const updateTotalPrice = (qty) => {
         const basePrice = parseFloat(priceDisplay.getAttribute('data-base-price'));
-        const total = basePrice * qty;
+        const addonTotal = selectedAddons().reduce((sum, addon) => sum + addon.price * addon.quantity, 0);
+        const total = (basePrice + addonTotal) * qty;
         priceDisplay.innerText = `₱${total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        productDetail.querySelector('#qty-minus').disabled = qty <= 1;
+        const quantityLimit = Math.floor(MAX_SHAKE_QUANTITY / (currentProduct?.bundle_quantity || 1));
+        productDetail.querySelector('#qty-plus').disabled = qty >= quantityLimit;
+        updateAddonControls();
     };
+
+    loadAddonPrices().catch(error => {
+        console.error('Unable to load add-on prices from the database:', error);
+    });
 
     const resetToDefaults = (product) => {
         currentProduct = product;
         qtyVal.innerText = "1";
-        const initialPrice = product.prices['tall'];
+        shakeStep.classList.remove('hidden');
+        addonsStep.classList.add('hidden');
+        const isBundle = product.bundle_quantity > 1;
+        const availableSizes = Object.keys(product.prices);
+        const singleSize = availableSizes.length === 1;
+        const selectedSize = availableSizes.includes('tall') ? 'tall' : availableSizes[0];
+        headingQty.classList.toggle('hidden', !isBundle);
+        headingQty.querySelector('span').textContent = isBundle ? 'BUNDLES' : 'QTY';
+        sizeBtns.forEach((btn, index) => {
+            const size = btn.textContent.trim().toLowerCase();
+            btn.classList.toggle('hidden', !availableSizes.includes(size));
+            btn.classList.toggle('active', size === selectedSize);
+        });
+        addonChoices.forEach(choice => choice.classList.toggle('hidden', isBundle));
+        productDetail.querySelector('.size-selector').classList.toggle('is-single-size', singleSize);
+        nextBtn.classList.toggle('hidden', isBundle);
+        addBtn.classList.toggle('hidden', !isBundle);
+        addBtn.textContent = isBundle ? 'Add Bundle to Cart' : 'Add to Cart';
+        const initialPrice = product.prices[selectedSize];
         priceDisplay.setAttribute('data-base-price', initialPrice);
+        addonChoices.forEach(choice => {
+            choice.querySelector('[data-addon-quantity]').textContent = '0';
+        });
         updateTotalPrice(1);
 
-        sizeBtns.forEach((btn, i) => btn.classList.toggle('active', i === 0));
-        productDetail.querySelector('.size-selector').classList.remove('is-grande');
+        productDetail.querySelector('.size-selector').classList.toggle('is-grande', selectedSize === 'grande');
     };
 
     productDetail.querySelector('#qty-plus').onclick = () => {
         let current = parseInt(qtyVal.innerText);
-        current++;
+        const quantityLimit = Math.floor(MAX_SHAKE_QUANTITY / (currentProduct?.bundle_quantity || 1));
+        if (current >= quantityLimit) {
+            onBulkOrderAttempt();
+            return;
+        }
+        current = Math.min(quantityLimit, current + 1);
         qtyVal.innerText = current;
         updateTotalPrice(current);
     };
@@ -59,25 +145,109 @@ export function initProductDetail({ onAddToCart } = {}) {
             updateTotalPrice(parseInt(qtyVal.innerText));
         };
     });
+    addonChoices.forEach(choice => {
+        choice.querySelectorAll('[data-addon-delta]').forEach(button => {
+            button.onclick = () => {
+                const quantityEl = choice.querySelector('[data-addon-quantity]');
+                const quantity = Number(quantityEl.textContent);
+                const totalSelected = selectedAddons().reduce((sum, addon) => sum + addon.quantity, 0);
+                const nextQuantity = quantity + Number(button.dataset.addonDelta);
+                if (nextQuantity < 0 || nextQuantity > MAX_ADDON_QUANTITY ||
+                    (nextQuantity > quantity && totalSelected >= MAX_ADDON_QUANTITY)) return;
+                quantityEl.textContent = String(nextQuantity);
+                updateTotalPrice(parseInt(qtyVal.innerText, 10));
+            };
+        });
+    });
+
+    nextBtn.onclick = () => {
+        shakeStep.classList.add('hidden');
+        addonsStep.classList.remove('hidden');
+        headingQty.classList.remove('hidden');
+        headingQty.querySelector('span').textContent = 'QTY';
+        nextBtn.classList.add('hidden');
+        addBtn.classList.remove('hidden');
+        stepTitle.textContent = 'Add-ons & Toppings';
+    };
+    productDetail.querySelector('#addons-back').onclick = () => {
+        addonsStep.classList.add('hidden');
+        shakeStep.classList.remove('hidden');
+        headingQty.classList.toggle('hidden', currentProduct?.bundle_quantity <= 1);
+        headingQty.querySelector('span').textContent =
+            currentProduct?.bundle_quantity > 1 ? 'BUNDLES' : 'QTY';
+        addBtn.classList.add('hidden');
+        nextBtn.classList.remove('hidden');
+        stepTitle.textContent = 'Customize Your Shake';
+    };
 
     addBtn.onclick = () => {
         if (!currentProduct) return;
         const size = getSelectedSize();
         const sizeKey = size.toLowerCase();
         const qty = parseInt(qtyVal.innerText, 10);
-        onAddToCart?.({
+        const item = {
             product_id: currentProduct.id,
             name: currentProduct.name,
             img: currentProduct.img,
             size,
             variant_id: currentProduct.variant_ids[sizeKey],
-            price: currentProduct.prices[sizeKey],
+            basePrice: currentProduct.prices[sizeKey],
+            price: currentProduct.prices[sizeKey] + selectedAddons().reduce((sum, addon) => sum + addon.price * addon.quantity, 0),
+            addOns: selectedAddons(),
             quantity: qty,
+            bundle_quantity: currentProduct.bundle_quantity || 1,
+        };
+        if (editingIndex !== null) {
+            const save = onSaveEdit;
+            const index = editingIndex;
+            reset();
+            save?.(item, index);
+        } else {
+            onAddToCart?.(item);
+            morphBackward();
+        }
+    };
+
+    const setProductDetails = (product) => {
+        productDetail.querySelector('#detail-name').textContent = product.name;
+        detailDesc.textContent = [
+            product.desc,
+            product.ingredients && `Ingredients: ${product.ingredients}`,
+        ].filter(Boolean).join('\n\n');
+        stepTitle.textContent = 'Customize Your Shake';
+        resetToDefaults(product);
+    };
+
+    const editItem = (product, item, index, { onSave, onCancel } = {}) => {
+        reset();
+        editingIndex = index;
+        onSaveEdit = onSave;
+        onCancelEdit = onCancel;
+        setProductDetails(product);
+        addBtn.textContent = 'Save Changes';
+        detailImg.src = `assets/img/${product.img}`;
+
+        const sizeKey = item.size.toLowerCase();
+        sizeBtns.forEach(btn => {
+            const isSelected = btn.textContent.trim().toLowerCase() === sizeKey;
+            btn.classList.toggle('active', isSelected);
         });
-        morphBackward();
+        productDetail.querySelector('.size-selector').classList.toggle('is-grande', sizeKey === 'grande');
+        priceDisplay.setAttribute('data-base-price', product.prices[sizeKey]);
+        qtyVal.textContent = String(item.quantity);
+        addonChoices.forEach(choice => {
+            const selected = item.addOns.find(addon => addon.name === choice.dataset.addonName);
+            choice.querySelector('[data-addon-quantity]').textContent = String(selected?.quantity || 0);
+        });
+        updateTotalPrice(item.quantity);
+        productDetail.classList.remove('hidden');
     };
 
     const morphForward = (startImg, product) => {
+        editingIndex = null;
+        onSaveEdit = null;
+        onCancelEdit = null;
+        addBtn.textContent = 'Add to Cart';
         lastClickedImg = startImg;
         const startRect = startImg.getBoundingClientRect();
 
@@ -90,9 +260,7 @@ export function initProductDetail({ onAddToCart } = {}) {
             }
         });
 
-        productDetail.querySelector('#detail-name').innerText = product.name;
-        productDetail.querySelector('#detail-desc').innerText = product.desc;
-        resetToDefaults(product);
+        setProductDetails(product);
 
         detailImg.src = startImg.src;
 
@@ -205,9 +373,30 @@ export function initProductDetail({ onAddToCart } = {}) {
         });
         lastClickedImg = null;
         currentProduct = null;
+        editingIndex = null;
+        onSaveEdit = null;
+        onCancelEdit = null;
+        addBtn.textContent = 'Add to Cart';
     };
 
-    productDetail.querySelector('.close-detail').onclick = morphBackward;
+    const closeDetail = () => {
+        if (editingIndex !== null) {
+            const cancel = onCancelEdit;
+            reset();
+            cancel?.();
+            return;
+        }
+        morphBackward();
+    };
+    productDetail.querySelector('.close-detail').onclick = closeDetail;
+    productDetail.addEventListener('click', event => {
+        if (event.target === productDetail) closeDetail();
+    });
 
-    return { morphForward, reset };
+    return {
+        morphForward,
+        editItem,
+        reset,
+        setBulkOrderPrompt: callback => { onBulkOrderAttempt = callback; },
+    };
 }
