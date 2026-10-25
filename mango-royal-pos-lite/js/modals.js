@@ -21,9 +21,6 @@ const formatAddOns = addOns => addOns.map(addon => {
 
 /* ---------- VERIFY ---------- */
 export function openVerifyModal(order, onConfirm) {
-    const isSingleServingOrder = order.items.length === 1
-        && Number(order.items[0].quantity) === 1
-        && (Number(order.items[0].bundleQuantity) || 1) === 1;
     const modal = mount(`
       <div class="modal-backdrop"><div class="modal">
         <div class="modal-header"><h2>Verify Payment</h2></div>
@@ -32,14 +29,14 @@ export function openVerifyModal(order, onConfirm) {
             <div class="row"><span>Order ID</span><span>${order.orderId}</span></div>
             ${order.items.map((i, idx) => `<div class="row"><span><span class="ln">${idx + 1}.</span> ${i.bundleQuantity > 1 ? `${i.quantity} bundle(s) (${i.quantity * i.bundleQuantity} Tall cups) ${i.name}` : `${i.quantity}× ${i.name} (${i.size})`}${i.addOns?.length ? `<br><small>Add-ons: ${formatAddOns(i.addOns)}</small>` : ''}</span><span>${peso(i.price * i.quantity)}</span></div>`).join('')}
             <div class="row"><span>Order total</span><span>${peso(order.total)}</span></div>
-            <div class="row" id="v-eligible-row" style="display:none"><span>Eligible gross portion</span><span id="v-eligible">₱0.00</span></div>
+            <div class="row" id="v-eligible-row" style="display:none"><span>One serving eligible for discount</span><span id="v-eligible">₱0.00</span></div>
             <div class="row" id="v-vat-row" style="display:none;color:#166534"><span>VAT exemption</span><span id="v-vat">-₱0.00</span></div>
             <div class="row" id="v-discount-row" style="display:none;color:#166534"><span id="v-discount-label">20% discount</span><span id="v-discount">-₱0.00</span></div>
             <div class="row total"><span>Total to be paid</span><span id="v-total">${peso(order.total)}</span></div>
           </div>
 
           <section class="verify-section">
-            <label class="verify-discount-toggle"><input type="checkbox" id="v-hasdisc"> Apply PWD / Senior discount and VAT exemption</label>
+            <label class="verify-discount-toggle"><input type="checkbox" id="v-hasdisc"> Apply PWD / Senior discount (one serving, automatic)</label>
             <div id="v-disc-block" class="discount-details hidden">
               <div class="chip-row">
                 <button type="button" class="chip active" data-disc="PWD">PWD</button>
@@ -57,25 +54,7 @@ export function openVerifyModal(order, onConfirm) {
                 <input type="date" id="v-senior-birthdate" autocomplete="bday">
                 <small id="v-senior-age" aria-live="polite">Enter the birthdate to confirm the holder is at least 60 years old.</small>
               </div>
-              <div class="discount-calculation ${isSingleServingOrder ? 'hidden' : ''}">
-                <label>Eligible portion calculation</label>
-                <div class="chip-row">
-                  <button type="button" class="chip active" data-scope="individual_share">Individual share</button>
-                  <button type="button" class="chip" data-scope="selected_items">Selected items</button>
-                </div>
-                <label for="v-cardholders">Eligible PWD / Senior cardholders present *</label>
-                <input type="number" id="v-cardholders" min="1" step="1" value="1" inputmode="numeric">
-                <div id="v-share-fields" class="discount-fields">
-                  <label for="v-total-people">Total people in the group *</label>
-                  <input type="number" id="v-total-people" min="1" step="1" value="1" inputmode="numeric">
-                  <small>Apply one equal share for each eligible cardholder.</small>
-                </div>
-                <div id="v-selected-fields" class="discount-fields hidden">
-                  <small>Select servings intended for the cardholder(s)' personal consumption. Shared bundle items are limited to one standard serving per eligible cardholder.</small>
-                  <div id="v-eligible-items"></div>
-                </div>
-                <div id="v-calculation-error" class="error-msg" aria-live="polite"></div>
-              </div>
+              <small>The discount is automatically applied to one serving from the first item in the order. VAT is calculated at 8% for the discounted portion only.</small>
             </div>
           </section>
 
@@ -98,7 +77,6 @@ export function openVerifyModal(order, onConfirm) {
     `, { closeOnBackdrop: false });
 
     let discountType = 'PWD';
-    let discountScope = 'individual_share';
     const q = sel => modal.querySelector(sel);
 
     function formatPwdIdInput() {
@@ -137,78 +115,25 @@ export function openVerifyModal(order, onConfirm) {
 
     function recompute() {
         const hasDisc = q('#v-hasdisc').checked;
-        const cardholderCount = isSingleServingOrder ? 1 : Number(q('#v-cardholders').value);
-        let totalPeople = null;
         let eligibleGross = 0;
         let vatExemptAmount = 0;
         let disc = 0;
         let total = order.total;
-        let valid = true;
-        let error = '';
-        let eligibleItems = [];
 
         if (hasDisc) {
-            if (isSingleServingOrder) {
-                discountScope = 'individual_share';
-                totalPeople = 1;
-                eligibleGross = order.total;
-            } else if (!Number.isInteger(cardholderCount) || cardholderCount < 1) {
-                valid = false;
-                error = 'Enter the number of eligible cardholders present.';
-            } else if (discountScope === 'individual_share') {
-                totalPeople = Number(q('#v-total-people').value);
-                if (!Number.isInteger(totalPeople) || totalPeople < 1) {
-                    valid = false;
-                    error = 'Enter the total number of people in the group.';
-                } else if (cardholderCount > totalPeople) {
-                    valid = false;
-                    error = 'Cardholders cannot exceed the number of people in the group.';
-                } else {
-                    eligibleGross = Math.round((order.total * cardholderCount / totalPeople + Number.EPSILON) * 100) / 100;
-                }
-            } else {
-                eligibleItems = Array.from(modal.querySelectorAll('.v-eligible-serving')).flatMap(input => {
-                    const servings = Number(input.value);
-                    const item = order.items.find(orderItem => Number(orderItem.id) === Number(input.dataset.itemId));
-                    if (!item || !Number.isInteger(servings) || servings < 0) {
-                        valid = false;
-                        error = 'Enter valid whole-number servings for the selected items.';
-                        return [];
-                    }
-                    const bundleQuantity = Number(item.bundleQuantity) || 1;
-                    const maximumServings = item.quantity * bundleQuantity;
-                    const eligibleLimit = bundleQuantity > 1
-                        ? Math.min(maximumServings, cardholderCount)
-                        : maximumServings;
-                    if (servings > eligibleLimit) {
-                        valid = false;
-                        error = bundleQuantity > 1
-                            ? `Shared bundles allow up to ${eligibleLimit} serving(s) for the eligible cardholders.`
-                            : `Only ${maximumServings} serving(s) were ordered for ${item.name}.`;
-                        return [];
-                    }
-                    if (servings > 0) {
-                        eligibleItems.push({ orderItemId: Number(item.id), servings });
-                        eligibleGross += Math.round((item.price / bundleQuantity * servings + Number.EPSILON) * 100) / 100;
-                    }
-                    return [];
-                });
-                eligibleGross = Math.round((eligibleGross + Number.EPSILON) * 100) / 100;
-                if (valid && eligibleGross <= 0) {
-                    valid = false;
-                    error = 'Select at least one serving for the cardholder(s).';
-                }
-            }
-            if (valid) {
-                const vatExclusiveAmount = Math.round((eligibleGross / 1.12 + Number.EPSILON) * 100) / 100;
-                vatExemptAmount = Math.round((eligibleGross - vatExclusiveAmount + Number.EPSILON) * 100) / 100;
-                disc = Math.round((vatExclusiveAmount * 0.20 + Number.EPSILON) * 100) / 100;
-                total = Math.round((order.total - vatExemptAmount - disc + Number.EPSILON) * 100) / 100;
-            }
+            const firstItem = [...order.items].sort((a, b) => Number(a.id) - Number(b.id))[0];
+            const bundleQuantity = Number(firstItem?.bundleQuantity) || 1;
+            eligibleGross = firstItem
+                ? Math.round((Number(firstItem.price) / bundleQuantity + Number.EPSILON) * 100) / 100
+                : 0;
+            const vatExclusiveAmount = Math.round((eligibleGross / 1.08 + Number.EPSILON) * 100) / 100;
+            vatExemptAmount = Math.round((eligibleGross - vatExclusiveAmount + Number.EPSILON) * 100) / 100;
+            disc = Math.round((vatExclusiveAmount * 0.20 + Number.EPSILON) * 100) / 100;
+            total = Math.round((order.total - vatExemptAmount - disc + Number.EPSILON) * 100) / 100;
         }
         q('#v-discount-row').style.display = hasDisc ? 'flex' : 'none';
-        q('#v-eligible-row').style.display = hasDisc && valid ? 'flex' : 'none';
-        q('#v-vat-row').style.display = hasDisc && valid ? 'flex' : 'none';
+        q('#v-eligible-row').style.display = hasDisc ? 'flex' : 'none';
+        q('#v-vat-row').style.display = hasDisc ? 'flex' : 'none';
         q('#v-eligible').textContent = peso(eligibleGross);
         q('#v-vat').textContent = `-${peso(vatExemptAmount)}`;
         q('#v-discount-label').textContent = `${discountType} discount (20%)`;
@@ -217,10 +142,6 @@ export function openVerifyModal(order, onConfirm) {
         q('#v-disc-block').classList.toggle('hidden', !hasDisc);
         q('#v-pwd-fields').classList.toggle('hidden', !hasDisc || discountType !== 'PWD');
         q('#v-senior-fields').classList.toggle('hidden', !hasDisc || discountType !== 'Senior');
-        q('#v-share-fields').classList.toggle('hidden', discountScope !== 'individual_share');
-        q('#v-selected-fields').classList.toggle('hidden', discountScope !== 'selected_items');
-        q('#v-calculation-error').textContent = hasDisc && !valid ? error : '';
-
         const amt = parseFloat(q('#v-amount').value);
         if (Number.isFinite(amt) && amt > 0 && amt >= total) {
             q('#v-change').classList.remove('hidden');
@@ -241,11 +162,6 @@ export function openVerifyModal(order, onConfirm) {
             vatExemptAmount,
             eligibleGross,
             hasDisc,
-            valid,
-            discountScope,
-            totalPeople,
-            cardholderCount,
-            eligibleItems,
         };
     }
 
@@ -267,35 +183,12 @@ export function openVerifyModal(order, onConfirm) {
         q('#v-err').textContent = '';
         recompute();
     }));
-    modal.querySelectorAll('[data-scope]').forEach(b => b.addEventListener('click', () => {
-        discountScope = b.dataset.scope;
-        modal.querySelectorAll('[data-scope]').forEach(x => x.classList.toggle('active', x === b));
-        q('#v-err').textContent = '';
-        recompute();
-    }));
-    q('#v-cardholders').addEventListener('input', () => { q('#v-err').textContent = ''; recompute(); });
-    q('#v-total-people').addEventListener('input', () => { q('#v-err').textContent = ''; recompute(); });
-    q('#v-eligible-items').innerHTML = order.items.map(item => {
-        const bundleQuantity = Number(item.bundleQuantity) || 1;
-        const availableServings = item.quantity * bundleQuantity;
-        const label = bundleQuantity > 1
-            ? `${item.quantity} bundle(s) · ${availableServings} Tall cups`
-            : `${item.quantity} ${item.size} serving(s)`;
-        return `
-          <label class="eligible-item-row">
-            <span><strong>${item.name}</strong><small>${label} · ${peso(item.price)} per ${bundleQuantity > 1 ? 'bundle' : 'serving'}</small></span>
-            <span class="eligible-serving-input"><input class="v-eligible-serving" type="number" min="0" max="${availableServings}" value="0" step="1" inputmode="numeric" data-item-id="${item.id}" aria-label="Eligible servings for ${item.name}"> servings</span>
-          </label>`;
-    }).join('');
-    q('#v-eligible-items').addEventListener('input', () => { q('#v-err').textContent = ''; recompute(); });
-
     q('#v-cancel').addEventListener('click', closeModal);
     q('#v-ok').addEventListener('click', () => {
         q('#v-err').textContent = '';
         const calculation = recompute();
         const { total, disc, vatExemptAmount, hasDisc } = calculation;
         const amt = parseFloat(q('#v-amount').value);
-        if (!calculation.valid) return (q('#v-err').textContent = q('#v-calculation-error').textContent);
         if (isNaN(amt) || amt <= 0) return (q('#v-err').textContent = 'Enter a valid payment amount.');
         if (amt < total) return (q('#v-err').textContent = `Insufficient payment (${peso(amt)} < ${peso(total)}).`);
         const pwdIdNumber = q('#v-pwd-id').value.trim();
@@ -323,10 +216,6 @@ export function openVerifyModal(order, onConfirm) {
             discountType: hasDisc ? discountType : null,
             discountAmount: disc,
             vatExemptAmount,
-            discountScope: hasDisc ? calculation.discountScope : null,
-            totalPeople: hasDisc && calculation.discountScope === 'individual_share' ? calculation.totalPeople : null,
-            cardholderCount: hasDisc ? calculation.cardholderCount : null,
-            eligibleItems: hasDisc && calculation.discountScope === 'selected_items' ? calculation.eligibleItems : [],
             pwdIdNumber: hasDisc && discountType === 'PWD' ? pwdIdNumber : null,
             seniorName: hasDisc && discountType === 'Senior' ? seniorName : null,
             seniorBirthdate: hasDisc && discountType === 'Senior' ? seniorBirthdate : null,

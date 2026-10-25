@@ -102,7 +102,11 @@ function normalizeMenuVariantPrices(sizes, fallbackPrices) {
             throw error;
         }
         seen.add(size);
-        normalized.push({ size, price });
+        normalized.push({
+            size,
+            price,
+            available: entry?.available !== false,
+        });
     }
     return normalized;
 }
@@ -389,7 +393,7 @@ router.get('/transactions', async (req, res) => {
             SELECT o.order_id, o.subtotal, o.total_price, o.created_at, o.status,
                    m.payment_method, m.payment_amount, m.discount_type, m.discount_amount,
                    m.vat_exempt_amount, m.discount_details,
-                   m.void_reason, m.is_walkin, m.updated_at
+                   m.void_reason, m.is_walkin, m.is_archived, m.updated_at
             FROM orders o
             LEFT JOIN pos_order_meta m ON m.order_id = o.order_id
             ORDER BY o.created_at DESC
@@ -446,6 +450,7 @@ router.get('/transactions', async (req, res) => {
                 paymentMethod: o.payment_method || (o.is_walkin ? 'Cash' : 'GCash'),
                 status: o.status === 'VERIFIED' ? 'Completed' : (o.status === 'VOIDED' ? 'Void' : (['READY', 'SERVED'].includes(o.status) ? 'Completed' : o.status)),
                 rawStatus: o.status,
+                archived: Boolean(o.is_archived),
                 timeServed: o.updated_at || o.created_at,
                 discount: o.discount_type ? {
                     type: o.discount_type,
@@ -467,17 +472,40 @@ router.get('/transactions', async (req, res) => {
     }
 });
 
+// PATCH /api/admin/transactions/:id/archive — Archive or restore a transaction.
+router.patch('/transactions/:id/archive', async (req, res) => {
+    const orderId = Number(req.params.id);
+    const { archived } = req.body || {};
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+        return res.status(400).json({ error: 'Invalid transaction ID.' });
+    }
+    if (typeof archived !== 'boolean') {
+        return res.status(400).json({ error: 'Archive state must be true or false.' });
+    }
+    try {
+        const [orders] = await db.query('SELECT order_id FROM orders WHERE order_id = ?', [orderId]);
+        if (!orders.length) return res.status(404).json({ error: 'Transaction not found.' });
+        await db.query(
+            `INSERT INTO pos_order_meta (order_id, is_archived) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE is_archived = VALUES(is_archived)`,
+            [orderId, archived ? 1 : 0]
+        );
+        res.json({ success: true, archived });
+    } catch (err) {
+        console.error('[admin] transaction archive state could not be saved:', err.message);
+        res.status(500).json({ error: 'Transaction archive state could not be saved.' });
+    }
+});
+
 // GET /api/admin/menu — Products + variants + categories
 router.get('/menu', async (req, res) => {
     try {
         const [rows] = await db.query(`
             SELECT p.product_id, p.name, p.description, p.image_url, p.is_available, c.category_name,
-                   p.bundle_quantity, pv.variant_id, pv.size_name, pv.price
+                   p.bundle_quantity, pv.variant_id, pv.size_name, pv.price, pv.is_available AS size_available
             FROM products p
-            JOIN product_variants pv ON pv.product_id = p.product_id
+            LEFT JOIN product_variants pv ON pv.product_id = p.product_id
             JOIN categories c ON c.category_id = p.category_id
-            WHERE pv.is_available = TRUE
-              AND (p.bundle_quantity = 1 OR pv.size_name = 'Tall')
             ORDER BY p.product_id, CASE pv.size_name WHEN 'Tall' THEN 0 WHEN 'Grande' THEN 1 ELSE 2 END
         `);
 
@@ -497,9 +525,15 @@ router.get('/menu', async (req, res) => {
                 });
             }
             const item = map.get(r.product_id);
+            if (!r.size_name) continue;
             const price = Number(r.price);
             item.price[r.size_name.toLowerCase()] = price;
-            item.sizes.push({ variantId: r.variant_id, size: r.size_name, price });
+            item.sizes.push({
+                variantId: r.variant_id,
+                size: r.size_name,
+                price,
+                available: Boolean(r.size_available),
+            });
         }
 
         res.json(Array.from(map.values()));
@@ -585,17 +619,20 @@ router.put('/menu/:id', async (req, res) => {
         const id = req.params.id;
         const { name, description, category, image, price, sizes, available } = req.body;
         const variantPrices = normalizeMenuVariantPrices(sizes, price);
-        const [products] = await db.query(`SELECT product_id FROM products WHERE product_id = ?`, [id]);
+        if (!variantPrices.some(variant => variant.available)) {
+            return res.status(400).json({ error: 'Enable at least one menu size.' });
+        }
+        const [products] = await db.query(`SELECT product_id, bundle_quantity FROM products WHERE product_id = ?`, [id]);
         if (!products.length) return res.status(404).json({ error: 'Product not found' });
+        if (Number(products[0].bundle_quantity) > 1
+            && variantPrices.some(variant => variant.size === 'Grande' && variant.available)) {
+            return res.status(400).json({ error: 'Bundle offers are limited to Tall size.' });
+        }
         const [variants] = await db.query(
             `SELECT variant_id, size_name FROM product_variants WHERE product_id = ?`,
             [id]
         );
         const variantsBySize = new Map(variants.map(variant => [variant.size_name.toLowerCase(), variant]));
-        if (variantPrices.some(variant => !variantsBySize.has(variant.size.toLowerCase()))) {
-            return res.status(400).json({ error: 'A selected size is not available for this product.' });
-        }
-
         // Find category id
         const [cats] = await db.query(`SELECT category_id FROM categories WHERE category_name = ?`, [category]);
         const catId = cats.length ? cats[0].category_id : 1;
@@ -607,10 +644,18 @@ router.put('/menu/:id', async (req, res) => {
         `, [name, description, catId, image, available ? 1 : 0, id]);
 
         for (const variant of variantPrices) {
-            await db.query(
-                `UPDATE product_variants SET price = ? WHERE variant_id = ? AND product_id = ?`,
-                [variant.price, variantsBySize.get(variant.size.toLowerCase()).variant_id, id]
-            );
+            const existingVariant = variantsBySize.get(variant.size.toLowerCase());
+            if (existingVariant) {
+                await db.query(
+                    `UPDATE product_variants SET price = ?, is_available = ? WHERE variant_id = ? AND product_id = ?`,
+                    [variant.price, variant.available ? 1 : 0, existingVariant.variant_id, id]
+                );
+            } else {
+                await db.query(
+                    `INSERT INTO product_variants (product_id, size_name, price, is_available) VALUES (?, ?, ?, ?)`,
+                    [id, variant.size, variant.price, variant.available ? 1 : 0]
+                );
+            }
         }
         res.json({ success: true });
     } catch (err) {
@@ -627,8 +672,8 @@ router.post('/menu', async (req, res) => {
             { size: 'Grande', price: price?.grande ?? 145 },
         ];
         const variantPrices = normalizeMenuVariantPrices(sizes, price);
-        if (!variantPrices.length) {
-            return res.status(400).json({ error: 'Add at least one menu size and price.' });
+        if (!variantPrices.some(variant => variant.available)) {
+            return res.status(400).json({ error: 'Enable at least one menu size.' });
         }
 
         const [cats] = await db.query(`SELECT category_id FROM categories WHERE category_name = ?`, [category]);
@@ -640,10 +685,10 @@ router.post('/menu', async (req, res) => {
         `, [catId, name, description, image || 'MangoRoyal.png', available ? 1 : 0]);
 
         const prodId = prod.insertId;
-        const values = variantPrices.map(() => '(?, ?, ?)').join(', ');
-        const params = variantPrices.flatMap(variant => [prodId, variant.size, variant.price]);
+        const values = variantPrices.map(() => '(?, ?, ?, ?)').join(', ');
+        const params = variantPrices.flatMap(variant => [prodId, variant.size, variant.price, variant.available ? 1 : 0]);
         await db.query(
-            `INSERT INTO product_variants (product_id, size_name, price) VALUES ${values}`,
+            `INSERT INTO product_variants (product_id, size_name, price, is_available) VALUES ${values}`,
             params
         );
 

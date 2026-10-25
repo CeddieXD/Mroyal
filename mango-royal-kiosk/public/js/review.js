@@ -1,5 +1,5 @@
 // js/review.js
-export function initReview({ onBack, onProceed, onEditItem }) {
+export function initReview({ onBack, onPlaceOrder, onEditItem }) {
     const screen = document.getElementById('review-screen');
     const itemsEl = screen.querySelector('#rev-items');
     const countEl = screen.querySelector('#rev-count');
@@ -8,7 +8,17 @@ export function initReview({ onBack, onProceed, onEditItem }) {
 
     screen.querySelector('#rev-back').onclick = onBack;
     screen.querySelector('#rev-add-more').onclick = onBack;
-    screen.querySelector('#rev-checkout').onclick = () => onProceed();
+    const placeOrderBtn = screen.querySelector('#rev-checkout');
+    placeOrderBtn.onclick = async () => {
+        placeOrderBtn.disabled = true;
+        placeOrderBtn.innerText = 'Placing order…';
+        try {
+            await onPlaceOrder();
+        } finally {
+            placeOrderBtn.disabled = false;
+            placeOrderBtn.innerText = 'Place Order →';
+        }
+    };
 
     const render = ({ items }) => {
         itemsEl.innerHTML = '';

@@ -7,7 +7,7 @@ style (plain HTML/CSS/JS, no build step). Drop-in sibling of the POS and Kitchen
 
 - **Dashboard** — sales analytics line chart, top items bar chart, today's operations metrics, weather widget, and a bottom-center Royal Insights capsule with an expanding analytics chat
 - Dashboard cards can be dropped onto the closed Royal Insights capsule; the drop target and AI request identify the selected card by its stable card key.
-- **Transactions** — searchable/filterable table with expandable order details, discount &amp; void reasons, styled preview, browser printing, and CSV/JSON downloads
+- **Transactions** — searchable/filterable table with expandable order details, reversible archiving, discount &amp; void reasons, styled preview, browser printing, and CSV/JSON downloads
 - **Menu Management** — category-filtered grid with add / edit / delete / toggle-availability
 - **Reports** — interval-based sales summary, product performance, payment methods, styled preview, browser printing, and CSV/JSON downloads
 - **Users** — user list with role pills, add / edit / delete / activate (in memory)

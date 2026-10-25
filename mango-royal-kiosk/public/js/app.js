@@ -7,7 +7,6 @@ import { initMainMenu } from './mainMenu.js';
 import { initProductDetail } from './productDetail.js';
 import { initCart } from './cart.js';
 import { initReview } from './review.js';
-import { initPayment } from './payment.js';
 import { initQueue } from './queue.js';
 
 const API_BASE = window.API_BASE || window.location.origin;
@@ -17,7 +16,7 @@ const INTRO_INTERVAL_MS = 8 * 1000;  // On splash, play intro every 8s
 
 const screenIds = [
     'splash-screen', 'intro', 'main-menu',
-    'product-detail', 'review-screen', 'payment-screen', 'queue-screen', 'idle-timeout-modal'
+    'product-detail', 'review-screen', 'queue-screen', 'idle-timeout-modal'
 ];
 
 const hideAll = () => screenIds.forEach(id => document.getElementById(id).classList.add('hidden'));
@@ -64,7 +63,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadComponent('main-menu', 'components/mainMenu.html'),
         loadComponent('product-detail', 'components/productDetail.html'),
         loadComponent('review-screen', 'components/review.html'),
-        loadComponent('payment-screen', 'components/payment.html'),
         loadComponent('queue-screen', 'components/queue.html'),
     ]);
 
@@ -110,13 +108,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const goReview = () => {
         hideAll();
         review.show({ items: cart.getSnapshot() });
-        startIdleTimer();
-    };
-
-    const goPayment = () => {
-        const total = cart.getSnapshot().reduce((s, i) => s + i.price * i.quantity, 0);
-        hideAll();
-        payment.show({ total });
         startIdleTimer();
     };
 
@@ -255,7 +246,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const review = initReview({
         onBack: () => goMenu(),
-        onProceed: () => goPayment(),
+        onPlaceOrder: submitOrder,
         onEditItem: (item, index) => {
             const product = menu.getProduct(item.product_id);
             if (!product) {
@@ -272,11 +263,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 onCancel: goReview,
             });
         },
-    });
-
-    const payment = initPayment({
-        onBack: () => goReview(),
-        onConfirm: submitOrder,
     });
 
     const queue = initQueue({

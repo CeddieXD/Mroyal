@@ -227,6 +227,7 @@ async function ensureMetaTable() {
             senior_birthdate DATE NULL,
             void_reason VARCHAR(255) NULL,
             is_walkin TINYINT(1) DEFAULT 0,
+            is_archived TINYINT(1) NOT NULL DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES orders(order_id)
         )
@@ -239,6 +240,7 @@ async function ensureMetaTable() {
         ['senior_birthdate', 'DATE NULL'],
         ['vat_exempt_amount', 'DECIMAL(10,2) DEFAULT 0'],
         ['discount_details', 'JSON NULL'],
+        ['is_archived', 'TINYINT(1) NOT NULL DEFAULT 0'],
     ];
     for (const [name, definition] of newColumns) {
         if (!existingColumns.has(name)) {
@@ -391,7 +393,9 @@ function receiptText(order) {
         '-'.repeat(columnWidth),
         ...(order.vatExemptAmount ? [formatSummary('VAT exemption:', order.vatExemptAmount)] : []),
         ...(order.discountAmount ? [formatSummary(`${order.discountType || 'Discount'} discount (20%):`, order.discountAmount)] : []),
-        ...(order.discountDetails?.scope === 'individual_share'
+        ...(order.discountDetails?.scope === 'single_serving'
+            ? ['Automatic discount: 1 serving']
+            : order.discountDetails?.scope === 'individual_share'
             ? [`Eligible share: ${order.discountDetails.cardholderCount} of ${order.discountDetails.totalPeople} people`]
             : order.discountDetails?.scope === 'selected_items'
                 ? [`Eligible servings: ${order.discountDetails.eligibleItems.reduce((sum, item) => sum + item.servings, 0)}`]
@@ -472,10 +476,6 @@ router.post('/orders/:id/verify', async (req, res) => {
         discountType = null,
         discountAmount = 0,
         vatExemptAmount = 0,
-        discountScope = null,
-        totalPeople = null,
-        cardholderCount = null,
-        eligibleItems = [],
         pwdIdNumber = null,
         seniorName = null,
         seniorBirthdate = null,
@@ -573,15 +573,12 @@ router.post('/orders/:id/verify', async (req, res) => {
                      JOIN product_variants pv ON pv.variant_id = oi.variant_id
                      JOIN products p ON p.product_id = pv.product_id
                      WHERE oi.order_id = ?
+                     ORDER BY oi.order_item_id
                      FOR UPDATE`,
                     [orderId]
                 );
                 discountCalculation = calculateDiscount({
                     orderTotal,
-                    scope: discountScope,
-                    totalPeople,
-                    cardholderCount,
-                    eligibleItems,
                     orderItems: itemRows,
                 });
             }

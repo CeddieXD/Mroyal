@@ -6,82 +6,20 @@ function invalid(message) {
     return error;
 }
 
-function requirePositiveInteger(value, label) {
-    const parsed = Number(value);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-        throw invalid(`${label} must be a positive whole number`);
-    }
-    return parsed;
-}
-
-function calculateDiscount({
-    orderTotal,
-    scope,
-    totalPeople,
-    cardholderCount,
-    eligibleItems = [],
-    orderItems = [],
-}) {
-    let eligibleGross;
-    let details;
-
-    if (scope === 'individual_share') {
-        const people = requirePositiveInteger(totalPeople, 'Number of people');
-        const cardholders = requirePositiveInteger(cardholderCount, 'Number of cardholders');
-        if (cardholders > people) {
-            throw invalid('Number of cardholders cannot exceed the number of people');
-        }
-        eligibleGross = roundCurrency(orderTotal * cardholders / people);
-        details = { scope, totalPeople: people, cardholderCount: cardholders };
-    } else if (scope === 'selected_items') {
-        const cardholders = requirePositiveInteger(cardholderCount, 'Number of cardholders');
-        if (!Array.isArray(eligibleItems) || eligibleItems.length === 0) {
-            throw invalid('Select at least one eligible serving');
-        }
-
-        const orderItemsById = new Map(orderItems.map(item => [Number(item.id), item]));
-        const seenItemIds = new Set();
-        const selectedItems = eligibleItems.map(selection => {
-            const itemId = Number(selection.orderItemId);
-            const servings = Number(selection.servings);
-            const item = orderItemsById.get(itemId);
-            if (!item || seenItemIds.has(itemId)) {
-                throw invalid('Eligible order items are invalid');
-            }
-            if (!Number.isInteger(servings) || servings < 1) {
-                throw invalid('Eligible servings must be positive whole numbers');
-            }
-            seenItemIds.add(itemId);
-
-            const bundleQuantity = Number(item.bundleQuantity) || 1;
-            const availableServings = Number(item.quantity) * bundleQuantity;
-            const maximumEligibleServings = bundleQuantity > 1
-                ? Math.min(availableServings, cardholders)
-                : availableServings;
-            if (servings > maximumEligibleServings) {
-                throw invalid('Eligible servings exceed the purchased amount or single-serve limit');
-            }
-
-            const eligibleAmount = roundCurrency(Number(item.price) / bundleQuantity * servings);
-            return {
-                orderItemId: itemId,
-                servings,
-                eligibleGross: eligibleAmount,
-            };
-        });
-        eligibleGross = roundCurrency(
-            selectedItems.reduce((sum, item) => sum + item.eligibleGross, 0)
-        );
-        details = { scope, cardholderCount: cardholders, eligibleItems: selectedItems };
-    } else {
-        throw invalid('Select a valid discount calculation method');
+function calculateDiscount({ orderTotal, orderItems = [] }) {
+    const firstItem = [...orderItems]
+        .sort((a, b) => Number(a.id) - Number(b.id))[0];
+    if (!firstItem) {
+        throw invalid('Cannot apply a discount to an order without items');
     }
 
+    const bundleQuantity = Number(firstItem.bundleQuantity) || 1;
+    const eligibleGross = roundCurrency(Number(firstItem.price) / bundleQuantity);
     if (eligibleGross <= 0 || eligibleGross > orderTotal) {
         throw invalid('Eligible amount must be greater than zero and cannot exceed the order total');
     }
 
-    const vatExclusiveAmount = roundCurrency(eligibleGross / 1.12);
+    const vatExclusiveAmount = roundCurrency(eligibleGross / 1.08);
     const vatExemptAmount = roundCurrency(eligibleGross - vatExclusiveAmount);
     const discountAmount = roundCurrency(vatExclusiveAmount * 0.20);
     const amountDue = roundCurrency(orderTotal - vatExemptAmount - discountAmount);
@@ -93,7 +31,9 @@ function calculateDiscount({
         discountAmount,
         amountDue,
         details: {
-            ...details,
+            scope: 'single_serving',
+            orderItemId: Number(firstItem.id),
+            servings: 1,
             eligibleGross,
             vatExclusiveAmount,
         },

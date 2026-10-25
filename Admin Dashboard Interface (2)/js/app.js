@@ -1082,7 +1082,7 @@ function chartBase() {
 function destroyChart(k) { if (charts[k]) { charts[k].destroy(); charts[k] = null; } }
 
 /* ---------- Transactions ---------- */
-const txState = { search:'', status:'all', payment:'all', time:'today', day:'all', expanded:null, auditItem:null, page:1, perPage:8 };
+const txState = { search:'', archive:'active', status:'all', payment:'all', time:'today', day:'all', expanded:null, auditItem:null, page:1, perPage:8 };
 function syncTxIntervalControls() {
     const filterSelect = $('#tx-time');
     const txDropdown = document.querySelector('.interval-dropdown[data-target="tx-time"]');
@@ -1097,7 +1097,7 @@ function syncTxIntervalControls() {
     }
 }
 syncTxIntervalControls();
-['tx-search','tx-status','tx-payment','tx-time','tx-day'].forEach(id => {
+['tx-search','tx-archive','tx-status','tx-payment','tx-time','tx-day'].forEach(id => {
     document.addEventListener('input', e => { if (e.target.id === id) { txState[id.slice(3)] = e.target.value; txState.page = 1; syncTxIntervalControls(); renderTransactions(); } });
     document.addEventListener('change', e => { if (e.target.id === id) { txState[id.slice(3)] = e.target.value; txState.page = 1; syncTxIntervalControls(); renderTransactions(); } });
 });
@@ -1121,6 +1121,8 @@ function normalizeStatusValue(value) {
 
 function filterTransactions() {
     return recentTransactions.filter(t => {
+        if (txState.archive === 'active' && t.archived) return false;
+        if (txState.archive === 'archived' && !t.archived) return false;
         const q = txState.search.toLowerCase();
         if (q && !t.id.toLowerCase().includes(q) && !t.items.some(i => i.toLowerCase().includes(q))) return false;
         if (txState.status !== 'all' && normalizeStatusValue(t.status) !== normalizeStatusValue(txState.status)) return false;
@@ -1205,7 +1207,10 @@ function renderTransactions() {
             <td><b>${peso2(t.total)}</b></td>
             <td>${peso2(t.amountChange||0)}</td>
             <td><span class="pill ${pillCls}">${t.status}</span></td>
-            <td style="text-align:center"><button class="icon-btn" data-tx="${t.id}" title="${expanded ? 'Hide' : 'View'} order details" aria-label="${expanded ? 'Hide' : 'View'} details for order ${escapeHtml(t.id)}" aria-expanded="${expanded}" aria-controls="${detailId}">${expanded?'▲':'▼'}</button></td>
+            <td class="tx-actions">
+                <button class="icon-btn" data-tx="${t.id}" title="${expanded ? 'Hide' : 'View'} order details" aria-label="${expanded ? 'Hide' : 'View'} details for order ${escapeHtml(t.id)}" aria-expanded="${expanded}" aria-controls="${detailId}">${expanded?'▲':'▼'}</button>
+                <button class="tx-archive-btn" type="button" data-archive-tx="${t.rawId}" aria-label="${t.archived ? 'Restore' : 'Archive'} transaction ${escapeHtml(t.id)}">${t.archived ? 'Restore' : 'Archive'}</button>
+            </td>
         </tr>`;
         if (expanded) {
             const orderItems = Array.isArray(t.itemDetails) ? t.itemDetails : [];
@@ -1219,7 +1224,9 @@ function renderTransactions() {
             const discountDetails = t.discount?.details;
             const eligibleGross = Number(discountDetails?.eligibleGross || 0);
             const vatExclusiveEligible = Number(discountDetails?.vatExclusiveAmount || 0);
-            const discountBasis = discountDetails?.scope === 'individual_share'
+            const discountBasis = discountDetails?.scope === 'single_serving'
+                ? `Automatic: ${(orderItems.find(orderItem => Number(orderItem.order_item_id) === Number(discountDetails.orderItemId))?.name || 'Order item')} ×1 serving`
+                : discountDetails?.scope === 'individual_share'
                 ? `Individual share: ${Number(discountDetails.cardholderCount)} of ${Number(discountDetails.totalPeople)} people`
                 : discountDetails?.scope === 'selected_items'
                     ? `Selected for ${Number(discountDetails.cardholderCount)} cardholder(s): ${(Array.isArray(discountDetails.eligibleItems)
@@ -1321,6 +1328,29 @@ function renderTransactions() {
         txState.expanded = txState.expanded === b.dataset.tx ? null : b.dataset.tx;
         txState.auditItem = null;
         renderTransactions();
+    }));
+    tbody.querySelectorAll('[data-archive-tx]').forEach(button => button.addEventListener('click', async () => {
+        const transaction = recentTransactions.find(item => Number(item.rawId) === Number(button.dataset.archiveTx));
+        if (!transaction) return;
+        const archived = !transaction.archived;
+        const action = archived ? 'archive' : 'restore';
+        if (!confirm(`${archived ? 'Archive' : 'Restore'} transaction ${transaction.id}?`)) return;
+
+        button.disabled = true;
+        try {
+            const response = await fetch(`${API_BASE}/api/admin/transactions/${encodeURIComponent(transaction.rawId)}/archive`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ archived }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || `Could not ${action} transaction (HTTP ${response.status}).`);
+            transaction.archived = archived;
+            renderTransactions();
+        } catch (error) {
+            button.disabled = false;
+            alert(`Could not ${action} transaction: ${error.message}`);
+        }
     }));
     tbody.querySelectorAll('[data-item-audit]').forEach(b => b.addEventListener('click', () => {
         txState.auditItem = txState.auditItem === b.dataset.itemAudit ? null : b.dataset.itemAudit;
@@ -1516,11 +1546,16 @@ function getMenuItemSizes(item) {
     if (Array.isArray(item?.sizes)) {
         return item.sizes
             .filter(size => size?.size && Number.isFinite(Number(size.price)))
-            .map(size => ({ ...size, size: String(size.size), price: Number(size.price) }));
+            .map(size => ({
+                ...size,
+                size: String(size.size),
+                price: Number(size.price),
+                available: size.available !== false,
+            }));
     }
     return Object.entries(item?.price || {})
         .filter(([, price]) => Number.isFinite(Number(price)))
-        .map(([size, price]) => ({ size, price: Number(price) }));
+        .map(([size, price]) => ({ size, price: Number(price), available: true }));
 }
 
 function renderMenu() {
@@ -1578,7 +1613,7 @@ function renderMenu() {
                 <h3 class="menu-name">${escapeHtml(i.name)}</h3>
                 <p class="menu-desc">${escapeHtml(i.description || 'No description provided.')}</p>
                 <div class="menu-price">
-                    ${sizes.map(size => `<span><span class="price-size">${escapeHtml(size.size)}</span><b>${peso(size.price)}</b></span>`).join('')}
+                    ${sizes.filter(size => size.available).map(size => `<span><span class="price-size">${escapeHtml(size.size)}</span><b>${peso(size.price)}</b></span>`).join('')}
                 </div>
             </div>
             <div class="menu-actions">
@@ -1682,9 +1717,16 @@ $('#menu-add').addEventListener('click', () => openMenuModal(null));
 function openMenuModal(item) {
     const isNew = !item;
     const it = item || { id:'', name:'', description:'', category:'BEST_SELLERS', available:true, image:'MangoRoyal.png' };
-    const sizes = isNew
-        ? [{ size: 'Tall', price: 120 }, { size: 'Grande', price: 145 }]
-        : getMenuItemSizes(it);
+    const isBundle = Number(it.bundleQuantity) > 1;
+    const existingSizes = getMenuItemSizes(it);
+    const sizes = ['Tall', 'Grande'].map((size, index) => {
+        const existingSize = existingSizes.find(entry => entry.size.toLowerCase() === size.toLowerCase());
+        return {
+            size,
+            price: existingSize?.price ?? (index === 0 ? 120 : 145),
+            available: !(isBundle && size === 'Grande') && (isNew || Boolean(existingSize?.available)),
+        };
+    });
     const existingImage = it.image
         ? (it.image.startsWith('http')
             ? it.image
@@ -1708,7 +1750,16 @@ function openMenuModal(item) {
                     </div>
                 </div>
             </div>
-            ${sizes.map((size, index) => `<label>${escapeHtml(size.size)} Price (₱)<input type="number" min="0" step="0.01" id="m-price-${index}" value="${size.price}"></label>`).join('')}
+            ${sizes.map((size, index) => `
+                <label class="menu-size-field">
+                    <span class="menu-size-toggle">
+                        <input type="checkbox" id="m-size-${index}" ${size.available ? 'checked' : ''} ${isBundle && size.size === 'Grande' ? 'disabled' : ''}>
+                        <span>${escapeHtml(size.size)} available</span>
+                    </span>
+                    ${escapeHtml(size.size)} Price (₱)
+                    <input type="number" min="0" step="0.01" id="m-price-${index}" value="${size.price}">
+                </label>`).join('')}
+            ${isBundle ? '<small class="span2">Bundle offers are limited to Tall size.</small>' : ''}
             <label class="span2" style="flex-direction:row;align-items:center;gap:10px">
                 <input type="checkbox" id="m-avail" ${it.available?'checked':''} style="width:18px;height:18px"> 
                 <span>Mark as Available for Ordering</span>
@@ -1742,10 +1793,14 @@ function openMenuModal(item) {
                 }
                 const updatedSizes = sizes.map((size, index) => ({
                     ...size,
-                    price: Number($(`#m-price-${index}`).value)
+                    price: Number($(`#m-price-${index}`).value),
+                    available: $(`#m-size-${index}`).checked,
                 }));
                 if (updatedSizes.some(size => !Number.isFinite(size.price) || size.price < 0)) {
-                    throw new Error('Enter a valid price for every available size.');
+                    throw new Error('Enter a valid price for each size.');
+                }
+                if (!updatedSizes.some(size => size.available)) {
+                    throw new Error('Enable at least one size for this menu item.');
                 }
                 const updated = {
                     name,
@@ -1776,8 +1831,10 @@ function openMenuModal(item) {
                     });
                 } else {
                     updated.id = it.id;
-                    const oldPrices = getMenuItemSizes(it).map(size => `${size.size}: ${peso(size.price)}`).join(' / ');
-                    const newPrices = updatedSizes.map(size => `${size.size}: ${peso(size.price)}`).join(' / ');
+                    const oldPrices = getMenuItemSizes(it)
+                        .map(size => `${size.size} ${size.available ? 'available' : 'unavailable'}: ${peso(size.price)}`).join(' / ');
+                    const newPrices = updatedSizes
+                        .map(size => `${size.size} ${size.available ? 'available' : 'unavailable'}: ${peso(size.price)}`).join(' / ');
                     const response = await fetch(`${API_BASE}/api/admin/menu/${it.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -1792,7 +1849,7 @@ function openMenuModal(item) {
                         recordActivity({
                             user: 'Admin User',
                             action: 'Updated menu item',
-                            details: `${updated.name} price changed from ${oldPrices || 'no sizes'} to ${newPrices || 'no sizes'}.`,
+                            details: `${updated.name} sizes and prices changed from ${oldPrices || 'no sizes'} to ${newPrices || 'no sizes'}.`,
                             category: 'Menu'
                         });
                     }
