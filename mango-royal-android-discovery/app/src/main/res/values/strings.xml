@@ -1,0 +1,45 @@
+<resources>
+    <string name="app_name">Mango Royal Connect</string>
+    <string name="local_connection">LOCAL CONNECTION</string>
+    <string name="instructions">Connect this device and the Mango Royal Windows server to the same Wi-Fi or phone hotspot. Internet access is not required.</string>
+    <string name="searching_server">Searching for the server on this local network…</string>
+    <string name="searching_services">Searching this network for Mango Royal services…</string>
+    <string name="search_again">Search again</string>
+    <string name="service_name_prefix">Mango Royal - </string>
+    <string name="discovery_start_failed">Local discovery could not start (error %1$d). Check Wi-Fi access and retry.</string>
+    <string name="discovery_stop_failed">Could not stop network search (error %1$d).</string>
+    <string name="discovery_failed">Local discovery failed: %1$s</string>
+    <string name="discovery_stop_error">Could not stop local discovery: %1$s</string>
+    <string name="resolve_failed">Found a Mango Royal app, but Android could not resolve its address (error %1$d). Search again or check local network access.</string>
+    <string name="address_lookup_failed">Found a Mango Royal app, but address lookup failed: %1$s</string>
+    <string name="server_unreachable">Found Mango Royal, but its server is unreachable from this network. Check hotspot device isolation.</string>
+    <string name="server_not_found">No Mango Royal server found yet. Confirm both devices are on the same Wi-Fi/hotspot and retry.</string>
+    <string name="manual_server_hint">Server address (for example, 192.168.0.188)</string>
+    <string name="connect_server">Connect by address</string>
+    <string name="connecting_server">Checking the server address…</string>
+    <string name="manual_server_error">Could not reach any Mango Royal app at that address. Check the server IP, Wi-Fi, and Windows Firewall.</string>
+    <string name="manual_server_invalid">Enter a server IP or hostname, such as 192.168.0.188.</string>
+    <string name="waiting_for_server">Waiting for server…</string>
+    <string name="pairing_title">Pair this phone with the server</string>
+    <string name="pairing_instructions">Enter the six-digit code shown in the Backend Runner. Pairing reports this phone connection status to the Runner.</string>
+    <string name="pairing_code_hint">Six-digit pairing code</string>
+    <string name="pair_device">Pair device</string>
+    <string name="pairing_waiting">Discover the server before pairing.</string>
+    <string name="pairing_in_progress">Pairing with Mango Royal…</string>
+    <string name="pairing_success">Paired. Keep Mango Royal Connect open to show this device as connected.</string>
+    <string name="pairing_error">Pairing failed: %1$s</string>
+    <string name="device_connected">Device connection: Connected</string>
+    <string name="device_reconnecting">Device connection: Reconnecting…</string>
+    <string name="device_repair_required">Device connection: Pair again using the code in Backend Runner.</string>
+    <string name="open_app">Open %1$s</string>
+    <string-array name="mango_apps">
+        <item>Customer Kiosk</item>
+        <item>Cashier POS</item>
+        <item>Kitchen Display</item>
+        <item>Admin Dashboard</item>
+    </string-array>
+    <plurals name="apps_found">
+        <item quantity="one">%1$d Mango Royal app found on this local network.</item>
+        <item quantity="other">%1$d Mango Royal apps found on this local network.</item>
+    </plurals>
+</resources>

@@ -17,6 +17,8 @@
 **/coverage/
 **/dist/
 **/build/
+**/.gradle/
+**/local.properties
 **/mango-royal-printer-server/reports/
 *.log
 Thumbs.db

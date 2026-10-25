@@ -2,7 +2,9 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const dgram = require('dgram');
+const net = require('net');
+const { createRequire } = require('module');
 const { exec } = require('child_process');
 
 const targetDir = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
@@ -14,6 +16,13 @@ const tlsKeyPath = process.env.HTTPS_KEY_FILE;
 const tlsCertPath = process.env.HTTPS_CERT_FILE;
 const liveReloadEnabled = process.env.LIVE_RELOAD === '1';
 const reloadClients = new Set();
+const backendRequire = createRequire(path.join(
+  __dirname,
+  '..',
+  'mango-royal-kiosk',
+  'mango-royal-backend',
+  'package.json'
+));
 
 if (Boolean(tlsKeyPath) !== Boolean(tlsCertPath)) {
   throw new Error('Set both HTTPS_KEY_FILE and HTTPS_CERT_FILE to enable HTTPS.');
@@ -22,6 +31,33 @@ if (Boolean(tlsKeyPath) !== Boolean(tlsCertPath)) {
 const tlsOptions = tlsKeyPath && tlsCertPath
   ? { key: fs.readFileSync(tlsKeyPath), cert: fs.readFileSync(tlsCertPath) }
   : null;
+
+function getLanAddress() {
+  const configuredAddress = process.env.LAN_HOST;
+  if (configuredAddress) {
+    if (!net.isIPv4(configuredAddress)) {
+      return Promise.reject(new Error('LAN_HOST must be a valid IPv4 address.'));
+    }
+    return Promise.resolve(configuredAddress);
+  }
+
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket('udp4');
+    let settled = false;
+    const finish = (address) => {
+      if (settled) return;
+      settled = true;
+      socket.close();
+      resolve(address);
+    };
+
+    socket.once('error', () => finish(null));
+    socket.connect(9, '1.1.1.1', () => {
+      const address = socket.address().address;
+      finish(net.isIPv4(address) && !address.startsWith('127.') ? address : null);
+    });
+  });
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -136,8 +172,42 @@ const handleRequest = (req, res) => {
 const server = tlsOptions
   ? https.createServer(tlsOptions, handleRequest)
   : http.createServer(handleRequest);
+let bonjourInstance = null;
 
-server.listen(port, () => {
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Cannot start Mango Royal - ${appName}: port ${port} is already in use.`);
+  } else {
+    console.error(`Cannot start Mango Royal - ${appName}: ${error.message}`);
+  }
+  process.exitCode = 1;
+});
+
+function advertiseOnLocalNetwork(lanAddress) {
+  try {
+    const { Bonjour } = backendRequire('bonjour-service');
+    bonjourInstance = new Bonjour({}, error => {
+      console.error(`  Local discovery error: ${error ? error.message : 'Unknown Bonjour error.'}`);
+    });
+    const service = bonjourInstance.publish({
+      name: `Mango Royal - ${appName}`,
+      type: 'http',
+      port,
+      host: 'mroyal.local',
+      txt: { app: appName }
+    });
+    const getRecords = service.records.bind(service);
+    service.records = () => getRecords().filter(record =>
+      (record.type !== 'A' && record.type !== 'AAAA') || record.data === lanAddress
+    );
+    return true;
+  } catch (error) {
+    console.error(`  Local discovery unavailable: ${error.message}`);
+    return false;
+  }
+}
+
+server.listen(port, async () => {
   if (liveReloadEnabled) {
     let reloadTimer;
     try {
@@ -157,19 +227,36 @@ server.listen(port, () => {
 
   const protocol = tlsOptions ? 'https' : 'http';
   const url = `${protocol}://localhost:${port}`;
+  let lanAddress = null;
   console.log(`====================================================`);
   console.log(`  Mango Royal - ${appName}`);
   console.log(`  Serving folder: ${targetDir}`);
   console.log(`  Running at:     ${url}`);
-  Object.values(os.networkInterfaces()).flat().forEach((network) => {
-    if (network && network.family === 'IPv4' && !network.internal) {
-      console.log(`  LAN address:    ${protocol}://${network.address}:${port}`);
+  try {
+    lanAddress = await getLanAddress();
+  } catch (error) {
+    console.error(`  LAN address could not be determined: ${error.message}`);
+  }
+  if (lanAddress) {
+    if (advertiseOnLocalNetwork(lanAddress)) {
+      console.log(`  Local name:     http://mroyal.local:${port}`);
     }
-  });
+    console.log(`  LAN address:    ${protocol}://${lanAddress}:${port}`);
+  } else {
+    console.log('  LAN address:    unavailable (no active network route)');
+  }
   console.log(`  Press Ctrl+C to stop`);
   console.log(`====================================================\n`);
 
   if (process.env.NO_BROWSER !== '1') {
     exec(`start "" "${url}"`);
   }
+});
+
+server.on('close', () => {
+  if (bonjourInstance) bonjourInstance.destroy();
+});
+
+process.once('exit', () => {
+  if (bonjourInstance) bonjourInstance.destroy();
 });

@@ -16,6 +16,95 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const LOCAL_PAIR_CODE = process.env.MROYAL_PAIR_CODE || '';
+const LOCAL_PAIR_CODE_PATTERN = /^\d{6}$/;
+const LOCAL_PAIR_RATE_LIMIT_MS = 60 * 1000;
+const LOCAL_PAIR_MAX_ATTEMPTS = 5;
+const LOCAL_DEVICE_ONLINE_MS = 20 * 1000;
+const pairedLocalDevices = new Map();
+const localPairAttempts = new Map();
+
+function isValidLocalPairCode(candidate) {
+    if (!LOCAL_PAIR_CODE_PATTERN.test(candidate) || !LOCAL_PAIR_CODE_PATTERN.test(LOCAL_PAIR_CODE)) {
+        return false;
+    }
+    return crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(LOCAL_PAIR_CODE));
+}
+
+function isLocalPairRateLimited(address) {
+    const now = Date.now();
+    const attempt = localPairAttempts.get(address);
+    if (!attempt || now - attempt.startedAt >= LOCAL_PAIR_RATE_LIMIT_MS) {
+        localPairAttempts.set(address, { startedAt: now, count: 1 });
+        return false;
+    }
+    attempt.count += 1;
+    return attempt.count > LOCAL_PAIR_MAX_ATTEMPTS;
+}
+
+app.post('/api/local-devices/pair', (req, res) => {
+    if (!LOCAL_PAIR_CODE_PATTERN.test(LOCAL_PAIR_CODE)) {
+        return res.status(503).json({ error: 'Local device pairing is not enabled in the server runner.' });
+    }
+    if (isLocalPairRateLimited(req.ip)) {
+        return res.status(429).json({ error: 'Too many pairing attempts. Wait one minute and try again.' });
+    }
+    const { code, deviceId, name } = req.body || {};
+    if (!isValidLocalPairCode(code)) {
+        return res.status(403).json({ error: 'Pairing code is incorrect.' });
+    }
+    if (typeof deviceId !== 'string' || !/^[a-f0-9-]{16,64}$/i.test(deviceId)
+        || typeof name !== 'string' || !name.trim() || name.length > 60) {
+        return res.status(400).json({ error: 'A valid device ID and name are required.' });
+    }
+    const existing = Array.from(pairedLocalDevices.values())
+        .find(device => device.deviceId === deviceId);
+    if (!existing && pairedLocalDevices.size >= 20) {
+        return res.status(429).json({ error: 'The maximum number of paired devices has been reached.' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    if (existing) pairedLocalDevices.delete(existing.token);
+    pairedLocalDevices.set(token, {
+        token,
+        deviceId,
+        name: name.trim(),
+        lastSeen: Date.now(),
+    });
+    res.json({ token, heartbeatIntervalMs: 5000 });
+});
+
+app.post('/api/local-devices/heartbeat', (req, res) => {
+    const match = /^Bearer ([a-f0-9]{64})$/i.exec(String(req.get('Authorization') || ''));
+    const device = match && pairedLocalDevices.get(match[1]);
+    if (!device) return res.status(401).json({ error: 'Device is not paired. Pair it again from Mango Royal Connect.' });
+    device.lastSeen = Date.now();
+    res.json({ status: 'ok' });
+});
+
+app.get('/api/local-devices/status', (req, res) => {
+    if (!isValidLocalPairCode(req.get('X-MRoyal-Pair-Code') || '')) {
+        return res.status(403).json({ error: 'Runner pairing code was rejected.' });
+    }
+    const now = Date.now();
+    res.json({
+        devices: Array.from(pairedLocalDevices.values()).map(device => ({
+            name: device.name,
+            online: now - device.lastSeen <= LOCAL_DEVICE_ONLINE_MS,
+            lastSeenSeconds: Math.max(0, Math.floor((now - device.lastSeen) / 1000)),
+        })),
+    });
+});
+
+app.get('/api/health', async (_req, res) => {
+    try {
+        await db.query('SELECT 1');
+        res.json({ status: 'ok' });
+    } catch (err) {
+        console.error('Backend health check failed:', err.message);
+        res.status(503).json({ status: 'unavailable' });
+    }
+});
+
 async function verifyDatabaseConnection() {
     try {
         await db.query('SELECT 1');
